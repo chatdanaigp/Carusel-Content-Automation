@@ -1,0 +1,5 @@
+{
+  "name": "TradingFlow GenAI",
+  "description": "Automated workflow to generate trading educational content and corresponding infographics using Gemini 3 Pro and Gemini 3 Nano Banana Pro.",
+  "requestFramePermissions": []
+}
