@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { generateContentIdeas, generateTradingSlides, generateInfographic } from './services/geminiService';
-import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea } from './types';
+import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea, UiDesignStyle, DesignStyle, DownloadMode, SocialConfig } from './types';
 import ApiKeyGuard from './components/ApiKeyGuard';
 import SlideCard from './components/SlideCard';
 import ImageResult from './components/ImageResult';
+import SocialSettings from './components/SocialSettings';
 
 const App: React.FC = () => {
   const [topic, setTopic] = useState('Mindset');
@@ -11,6 +12,27 @@ const App: React.FC = () => {
   const [aspectRatio, setAspectRatio] = useState<string>('1:1');
   const [status, setStatus] = useState<WorkflowStatus>(WorkflowStatus.IDLE);
   
+  // Configuration States
+  const [uiDesignStyle, setUiDesignStyle] = useState<UiDesignStyle>('ORIGINAL');
+  const [downloadMode, setDownloadMode] = useState<DownloadMode>('AUTO');
+  
+  // Social Media Configuration State
+  const [socialConfig, setSocialConfig] = useState<SocialConfig>({
+    useSameHandle: true,
+    masterHandle: 'crt.trader',
+    platforms: [
+        { id: 'tiktok', name: 'TikTok', iconName: 'TikTok Logo', selected: true, handle: 'crt.trader' },
+        { id: 'youtube', name: 'YouTube', iconName: 'YouTube Logo', selected: true, handle: 'crt.trader' },
+        { id: 'instagram', name: 'Instagram', iconName: 'Instagram Logo', selected: true, handle: 'crt.trader.official' },
+        { id: 'facebook', name: 'Facebook', iconName: 'Facebook Logo', selected: false, handle: '' },
+        { id: 'x', name: 'X', iconName: 'X (Twitter) Logo', selected: false, handle: '' },
+        { id: 'line', name: 'Line', iconName: 'Line App Logo', selected: false, handle: '' },
+    ]
+  });
+  
+  // Preview Modal State
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+
   // Step 1 Data
   const [contentIdeas, setContentIdeas] = useState<ContentIdea[]>([]);
   
@@ -47,6 +69,16 @@ const App: React.FC = () => {
     setSelectedIdea(idea);
     setStatus(WorkflowStatus.GENERATING_SLIDES);
     
+    // Resolve the style for this generation session
+    let activeStyle: DesignStyle = 'ORIGINAL';
+    if (uiDesignStyle === 'RANDOM') {
+        const pool: DesignStyle[] = ['MODERN', 'CYBERPUNK', 'LUXURY', 'MINIMALIST'];
+        const randomIndex = Math.floor(Math.random() * pool.length);
+        activeStyle = pool[randomIndex];
+    } else {
+        activeStyle = uiDesignStyle as DesignStyle;
+    }
+
     try {
       // 2a. Generate Text Slides
       const generatedSlides = await generateTradingSlides(idea, language);
@@ -60,8 +92,8 @@ const App: React.FC = () => {
       }));
       setImages(initialImages);
 
-      // 2b. Start Image Generation
-      await generateImagesSequentially(generatedSlides);
+      // 2b. Start Image Generation with the resolved style
+      await generateImagesSequentially(generatedSlides, activeStyle);
 
     } catch (err) {
        console.error(err);
@@ -83,10 +115,10 @@ const App: React.FC = () => {
     }
   };
 
-  const generateImagesSequentially = async (slideData: SlideContent[]) => {
+  const generateImagesSequentially = async (slideData: SlideContent[], style: DesignStyle) => {
     setStatus(WorkflowStatus.GENERATING_IMAGES);
 
-    // Using a loop to process sequentially to handle auth errors gracefully
+    // Using a loop to process sequentially to handle auth errors gracefully and rate limits
     for (let i = 0; i < slideData.length; i++) {
         const slide = slideData[i];
         const isTitleSlide = i === 0; // Identify first slide
@@ -96,56 +128,96 @@ const App: React.FC = () => {
             img.slideId === slide.id ? { ...img, status: 'loading' } : img
         ));
 
-        try {
-            // Pass content text and isTitleSlide flag
-            const base64Image = await generateInfographic(
-                slide.visualPrompt, 
-                slide.title, 
-                slide.content, 
-                aspectRatio,
-                isTitleSlide
-            );
-            
-            setImages(prev => prev.map(img => 
-                img.slideId === slide.id ? { ...img, status: 'success', imageUrl: base64Image } : img
-            ));
-        } catch (e: any) {
-            console.error(`Failed to generate image for slide ${slide.id}`, e);
-            
-            let retrySuccess = false;
+        let attempts = 0;
+        let success = false;
+        const maxAttempts = 5;
 
-            if (isPermissionError(e) && window.aistudio?.openSelectKey) {
-                 try {
-                     await window.aistudio.openSelectKey();
-                     // Retry with same params
-                     const base64ImageRetry = await generateInfographic(
-                        slide.visualPrompt, 
-                        slide.title, 
-                        slide.content, 
-                        aspectRatio,
-                        isTitleSlide
-                     );
-                     setImages(prev => prev.map(img => 
-                        img.slideId === slide.id ? { ...img, status: 'success', imageUrl: base64ImageRetry } : img
-                     ));
-                     retrySuccess = true;
-                 } catch (retryError: any) {
-                     if (isPermissionError(retryError)) {
-                        setImages(prev => prev.map(img => 
-                            img.slideId === slide.id ? { ...img, status: 'error' } : img
-                        ));
-                        setError("Permission denied. Billing enabled project required.");
-                        setStatus(WorkflowStatus.IDLE); 
-                        return; 
-                     }
-                 }
-            }
-
-            if (!retrySuccess) {
+        while (attempts < maxAttempts && !success) {
+            try {
+                // Pass content text, isTitleSlide flag, design style AND social config
+                const base64Image = await generateInfographic(
+                    slide.visualPrompt, 
+                    slide.title, 
+                    slide.content, 
+                    aspectRatio,
+                    isTitleSlide,
+                    style,
+                    socialConfig
+                );
+                
                 setImages(prev => prev.map(img => 
-                    img.slideId === slide.id ? { ...img, status: 'error' } : img
+                    img.slideId === slide.id ? { ...img, status: 'success', imageUrl: base64Image } : img
                 ));
+                success = true;
+
+                // Success! Wait a bit before next slide to be nice to rate limiter (pacing)
+                // Skip delay on the very last slide
+                if (i < slideData.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 4000));
+                }
+
+            } catch (e: any) {
+                // Check for 429 Rate Limit
+                const is429 = e.message?.includes('429') || e.message?.includes('RESOURCE_EXHAUSTED') || JSON.stringify(e).includes('RESOURCE_EXHAUSTED');
+                
+                if (is429) {
+                    attempts++;
+                    // Exponential backoff: 5s, 10s, 15s...
+                    const waitTime = 5000 * attempts;
+                    console.warn(`Rate limit hit for slide ${slide.id}. Waiting ${waitTime/1000}s before retry ${attempts}/${maxAttempts}...`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    continue; // Retry loop
+                }
+
+                // Check for Permission Error
+                if (isPermissionError(e) && window.aistudio?.openSelectKey) {
+                     try {
+                         await window.aistudio.openSelectKey();
+                         // Retry with same params immediately after new key selection
+                         const base64ImageRetry = await generateInfographic(
+                            slide.visualPrompt, 
+                            slide.title, 
+                            slide.content, 
+                            aspectRatio,
+                            isTitleSlide,
+                            style,
+                            socialConfig
+                         );
+                         setImages(prev => prev.map(img => 
+                            img.slideId === slide.id ? { ...img, status: 'success', imageUrl: base64ImageRetry } : img
+                         ));
+                         success = true;
+                         // Wait after success
+                         if (i < slideData.length - 1) {
+                            await new Promise(resolve => setTimeout(resolve, 4000));
+                         }
+                     } catch (retryError: any) {
+                         if (isPermissionError(retryError)) {
+                            setImages(prev => prev.map(img => 
+                                img.slideId === slide.id ? { ...img, status: 'error' } : img
+                            ));
+                            setError("Permission denied. Billing enabled project required.");
+                            setStatus(WorkflowStatus.IDLE); 
+                            return; // Stop the entire process
+                         }
+                         // If permission retry failed for another reason (e.g. 429), it might be caught by outer logic or next loop if structured differently, 
+                         // but here we just log and fail this specific slide to avoid infinite loops in complex error states.
+                         console.error(`Retry after permission grant failed for slide ${slide.id}`, retryError);
+                     }
+                }
+                
+                if (success) break;
+
+                // If not 429 and not permission error (or permission fix failed), log and break.
+                console.error(`Failed to generate image for slide ${slide.id}`, e);
+                break;
             }
+        }
+
+        if (!success) {
+            setImages(prev => prev.map(img => 
+                img.slideId === slide.id ? { ...img, status: 'error' } : img
+            ));
         }
     }
     
@@ -207,52 +279,153 @@ const App: React.FC = () => {
                 Enter a keyword to generate catchy trading content ideas (Step 1 of 2)
                 </p>
 
-                {/* Controls */}
-                <div className="flex flex-col gap-4 mb-6 items-center">
-                    {/* Language Selection */}
-                    <div className="bg-slate-800 p-1 rounded-lg border border-slate-700 inline-flex">
-                        <button
-                        onClick={() => setLanguage('TH')}
-                        disabled={isGenerating}
-                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                            language === 'TH' 
-                            ? 'bg-blue-600 text-white shadow' 
-                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                        }`}
-                        >
-                        Thai 🇹🇭
-                        </button>
-                        <button
-                        onClick={() => setLanguage('EN')}
-                        disabled={isGenerating}
-                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                            language === 'EN' 
-                            ? 'bg-blue-600 text-white shadow' 
-                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                        }`}
-                        >
-                        English 🇺🇸
-                        </button>
+                {/* Controls Container */}
+                <div className="flex flex-col gap-6 mb-8 items-center bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50">
+                    
+                    {/* Top Row: Language & Download Mode */}
+                    <div className="flex flex-wrap gap-6 justify-center w-full">
+                        {/* Language Selection */}
+                        <div className="flex flex-col items-center gap-2">
+                            <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Language</label>
+                            <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                                <button
+                                    onClick={() => setLanguage('TH')}
+                                    disabled={isGenerating}
+                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                        language === 'TH' 
+                                        ? 'bg-blue-600 text-white shadow' 
+                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                >
+                                    Thai 🇹🇭
+                                </button>
+                                <button
+                                    onClick={() => setLanguage('EN')}
+                                    disabled={isGenerating}
+                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                        language === 'EN' 
+                                        ? 'bg-blue-600 text-white shadow' 
+                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                >
+                                    English 🇺🇸
+                                </button>
+                            </div>
+                        </div>
+
+                         {/* Download Mode */}
+                         <div className="flex flex-col items-center gap-2">
+                            <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Download Mode</label>
+                            <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                                <button
+                                    onClick={() => setDownloadMode('AUTO')}
+                                    disabled={isGenerating}
+                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                        downloadMode === 'AUTO' 
+                                        ? 'bg-emerald-600 text-white shadow' 
+                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+                                    Auto
+                                </button>
+                                <button
+                                    onClick={() => setDownloadMode('MANUAL')}
+                                    disabled={isGenerating}
+                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                        downloadMode === 'MANUAL' 
+                                        ? 'bg-emerald-600 text-white shadow' 
+                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" /></svg>
+                                    Manual
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
-                    {/* Aspect Ratio Selection */}
-                    <div className="grid grid-cols-3 gap-3 w-full max-w-lg">
-                        {ratioOptions.map((opt) => (
-                            <button
-                                key={opt.id}
-                                onClick={() => setAspectRatio(opt.id)}
+                    <div className="w-full h-px bg-slate-700/50"></div>
+
+                    {/* Middle Row: Design Style */}
+                    <div className="flex flex-col items-center gap-2 w-full">
+                        <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Visual Style</label>
+                        <div className="grid grid-cols-3 gap-4 w-full max-w-lg">
+                             <button
+                                onClick={() => setUiDesignStyle('ORIGINAL')}
                                 disabled={isGenerating}
                                 className={`
-                                    flex flex-col items-center justify-center p-3 rounded-lg border transition-all
-                                    ${aspectRatio === opt.id 
-                                        ? 'bg-blue-600/20 border-blue-500 text-white' 
-                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600 hover:bg-slate-750'}
+                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                    ${uiDesignStyle === 'ORIGINAL' 
+                                        ? 'bg-slate-700 border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.2)]' 
+                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
                                 `}
                             >
-                                <span className="font-bold text-sm">{opt.label}</span>
-                                <span className="text-[10px] opacity-70">{opt.desc}</span>
+                                <span className={`font-bold text-sm ${uiDesignStyle === 'ORIGINAL' ? 'text-yellow-400' : 'text-slate-300'}`}>Original</span>
+                                <span className="text-[9px] opacity-70 mt-1">Dark Navy & Gold</span>
                             </button>
-                        ))}
+
+                            <button
+                                onClick={() => setUiDesignStyle('MODERN')}
+                                disabled={isGenerating}
+                                className={`
+                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                    ${uiDesignStyle === 'MODERN' 
+                                        ? 'bg-slate-700 border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.2)]' 
+                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
+                                `}
+                            >
+                                <span className={`font-bold text-sm ${uiDesignStyle === 'MODERN' ? 'text-cyan-300' : 'text-slate-300'}`}>Modern</span>
+                                <span className="text-[9px] opacity-70 mt-1">Slate & Neon Blue</span>
+                            </button>
+
+                            <button
+                                onClick={() => setUiDesignStyle('RANDOM')}
+                                disabled={isGenerating}
+                                className={`
+                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                    ${uiDesignStyle === 'RANDOM' 
+                                        ? 'bg-slate-700 border-purple-400 shadow-[0_0_15px_rgba(192,132,252,0.2)]' 
+                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
+                                `}
+                            >
+                                <span className={`font-bold text-sm ${uiDesignStyle === 'RANDOM' ? 'text-purple-300' : 'text-slate-300'}`}>Surprise Me</span>
+                                <span className="text-[9px] opacity-70 mt-1">Random Variety</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="w-full h-px bg-slate-700/50"></div>
+
+                    {/* Social Media Settings */}
+                    <SocialSettings 
+                        config={socialConfig} 
+                        onChange={setSocialConfig} 
+                        disabled={isGenerating}
+                    />
+
+                    <div className="w-full h-px bg-slate-700/50"></div>
+
+                    {/* Bottom Row: Aspect Ratio */}
+                    <div className="flex flex-col items-center gap-2 w-full">
+                         <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Aspect Ratio</label>
+                        <div className="grid grid-cols-3 gap-3 w-full max-w-lg">
+                            {ratioOptions.map((opt) => (
+                                <button
+                                    key={opt.id}
+                                    onClick={() => setAspectRatio(opt.id)}
+                                    disabled={isGenerating}
+                                    className={`
+                                        flex flex-col items-center justify-center p-2 rounded-lg border transition-all
+                                        ${aspectRatio === opt.id 
+                                            ? 'bg-blue-600/20 border-blue-500 text-white' 
+                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600 hover:bg-slate-750'}
+                                    `}
+                                >
+                                    <span className="font-bold text-sm">{opt.label}</span>
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
 
@@ -340,7 +513,12 @@ const App: React.FC = () => {
                             &larr; Back to Ideas
                         </button>
                         <h2 className="text-2xl font-bold text-white">{selectedIdea.title}</h2>
-                        <p className="text-sm text-slate-400">{selectedIdea.summary}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                            <span className="text-sm text-slate-400">{selectedIdea.summary}</span>
+                            <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700">
+                                {uiDesignStyle === 'RANDOM' ? 'Surprise Style' : uiDesignStyle}
+                            </span>
+                        </div>
                     </div>
                     
                     {/* Progress Badge */}
@@ -372,10 +550,46 @@ const App: React.FC = () => {
                         return (
                         <div key={slide.id} className="flex flex-col gap-4">
                             <SlideCard slide={slide} />
-                            {img && <ImageResult image={img} />}
+                            {img && <ImageResult image={img} downloadMode={downloadMode} onPreview={(url) => setPreviewImage(url)} />}
                         </div>
                         );
                     })}
+                </div>
+            </div>
+          )}
+
+          {/* IMAGE PREVIEW MODAL */}
+          {previewImage && (
+            <div 
+                className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in"
+                onClick={() => setPreviewImage(null)}
+            >
+                <div className="relative max-w-5xl w-full max-h-screen flex flex-col items-center">
+                    <img 
+                        src={previewImage} 
+                        alt="Preview" 
+                        className="max-h-[85vh] w-auto object-contain rounded-md shadow-2xl border border-slate-800"
+                        onClick={(e) => e.stopPropagation()}
+                    />
+                    
+                    <div className="mt-4 flex gap-4" onClick={(e) => e.stopPropagation()}>
+                        <button 
+                            onClick={() => setPreviewImage(null)}
+                            className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 rounded-full font-bold transition-all"
+                        >
+                            Close
+                        </button>
+                        <a 
+                            href={previewImage} 
+                            download={`trading-slide-preview-${Date.now()}.png`}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-full font-bold transition-all shadow-lg flex items-center gap-2"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            Download High Res
+                        </a>
+                    </div>
                 </div>
             </div>
           )}

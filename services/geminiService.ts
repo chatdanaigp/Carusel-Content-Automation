@@ -1,10 +1,11 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { SlideContent, ContentIdea } from "../types";
+import { SlideContent, ContentIdea, DesignStyle, SocialConfig } from "../types";
 
 // Helper to initialize AI client. 
 // Note: We create a new instance per call to ensure latest API key is used if re-selected.
 const getAiClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // User explicitly requested to use this specific API Key
+  return new GoogleGenAI({ apiKey: "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA" });
 };
 
 export const generateContentIdeas = async (keyword: string, language: 'TH' | 'EN'): Promise<ContentIdea[]> => {
@@ -22,7 +23,7 @@ export const generateContentIdeas = async (keyword: string, language: 'TH' | 'EN
   `;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
+    model: 'gemini-3-flash-preview',
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -76,7 +77,7 @@ export const generateTradingSlides = async (selectedIdea: ContentIdea, language:
   `;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
+    model: 'gemini-3-flash-preview',
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -115,103 +116,207 @@ export const generateInfographic = async (
   titleText: string, 
   contentText: string, 
   aspectRatio: string = "1:1",
-  isTitleSlide: boolean = false
+  isTitleSlide: boolean = false,
+  style: DesignStyle = 'ORIGINAL',
+  socialConfig?: SocialConfig
 ): Promise<string> => {
   const ai = getAiClient();
 
   let finalPrompt = "";
+  let footerInstruction = "";
 
-  if (isTitleSlide) {
-    // Special prompt for Slide 1: Text Only, No illustrations
-    // Matches the request to mimic the attached style: Text emphasis, dark background, no pictures.
-    finalPrompt = `
-      Role: Senior Graphic Designer & Pro Trader Content Creator.
-      Task: Create a TEXT-ONLY Cover/Hook image for a trading carousel.
+  // Dynamic Footer Construction based on Config
+  if (socialConfig) {
+      const activePlatforms = socialConfig.platforms.filter(p => p.selected);
       
-      CRITICAL INSTRUCTION: DO NOT generate any characters, people, 3D objects, or cartoons. This image must be TYPOGRAPHY ONLY.
-      
-      Visual Style:
-      - Background: Professional Dark Navy/Black Gradient. Can have very subtle, low-opacity abstract technical chart lines blended into the background.
-      - Vibe: Premium, Serious, Secretive, "Clickbait" but professional.
-      
-      Text Layout & Styling:
-      1. TOP HEADLINE: "${titleText}"
-         - Font: Large, Bold, Sans-Serif.
-         - Color: White with a subtle outer glow.
-         
-      2. CENTER HOOK (Main Focus):
-         - Text to Display: "${contentText}"
-         - Note: This text must be VERY LARGE and readable. It represents the key essence or hook.
-         - Font: Very Large, Heavy weight.
-         - Color: Gold (#FFD700) or Bright Yellow to contrast against the dark background.
-         - Layout: Center of the image, dominating the space.
-         
-      3. FOOTER: 
-         - Layout: Horizontal row at the very bottom.
-         - Content:
-           [Tiktok Logo] crt.trader   [YouTube Logo] crt.trader   [Instagram Logo] crt.trader.official
-         - IMPORTANT: Use actual minimalist icons for Tiktok, YouTube, and Instagram. Do NOT write the platform names as text.
-      
-      Aspect Ratio: ${aspectRatio}.
-    `;
+      if (activePlatforms.length > 0) {
+          const footerItems = activePlatforms.map(p => {
+              const handle = socialConfig.useSameHandle ? socialConfig.masterHandle : p.handle;
+              // We instruct the model to use the Icon, then the handle text
+              return `[${p.iconName}] ${handle}`;
+          }).join("     ");
+
+          footerInstruction = `
+            FOOTER SECTION (Bottom of image):
+            - Layout: A clean, horizontal row at the very bottom.
+            - Content to Display: ${footerItems}
+            - CRITICAL INSTRUCTION: You MUST use the actual LOGO ICONS for ${activePlatforms.map(p => p.name).join(', ')}. 
+            - DO NOT write the platform name (e.g. do not write "Tiktok") as text. Only the username/handle should be text.
+            - Visual Style: Minimalist, professional icons. Text should be small but readable.
+          `;
+      } else {
+          footerInstruction = "FOOTER: Do not display any social media footer.";
+      }
   } else {
-    // Standard prompt for subsequent slides (Visuals + Text)
-    // Updated Layout: Headline -> Content -> Image -> Content -> Footer
-    finalPrompt = `
-      Role: Senior Graphic Designer and Professional Gold Trading Content Creator.
-      Task: Create an educational Infographic Slide.
-
-      STRICT VERTICAL LAYOUT ORDER:
-      1. **HEADLINE** (Top): "${titleText}"
-         - Style: Bold, Professional font, Gold or White.
-      
-      2. **TEXT SECTION 1** (Upper Body): 
-         - Display the first part or summary of this text: "${contentText}"
-         - Clear, readable typography.
-      
-      3. **ILLUSTRATION** (Center):
-         - Visual: "${visualPrompt}"
-         - Style: High-quality Chart/Graph/Trading Visual. Professional, Dark Mode aesthetic. NO CARTOONS. 
-         - Must be the focal point in the middle.
-
-      4. **TEXT SECTION 2** (Lower Body):
-         - Display any remaining text or key takeaway from: "${contentText}"
-         - Place this below the illustration.
-
-      5. **FOOTER** (Bottom): 
-         - Layout: Horizontal row at the very bottom.
-         - Content:
-           [Tiktok Logo] crt.trader   [YouTube Logo] crt.trader   [Instagram Logo] crt.trader.official
-         - IMPORTANT: Use actual minimalist icons for Tiktok, YouTube, and Instagram. Do NOT write the platform names as text.
-
-      General Style:
-      - Background: Dark Navy/Black Gradient (Professional Trading Theme).
-      - Composition: Balanced "Sandwich" layout (Text - Image - Text).
-      - Aspect Ratio: ${aspectRatio}.
-      - Atmosphere: Knowledgeable, Premium, Trustworthy.
-    `;
+      // Fallback if no config provided (Legacy behavior)
+      footerInstruction = `
+        FOOTER:
+        - Minimalist row of icons: [Tiktok Logo] [YouTube Logo] [Instagram Logo]
+        - Followed by handles: crt.trader / crt.trader / crt.trader.official
+        - IMPORTANT: Use LOGOS, do not write platform names text.
+      `;
   }
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image', 
-    contents: {
-      parts: [
-        { text: finalPrompt }
-      ]
-    },
+  switch (style) {
+    case 'CYBERPUNK':
+        finalPrompt = isTitleSlide ? `
+            Role: Expert Digital Artist. Style: CYBERPUNK / NEON TRADER.
+            Task: Cover Image. NO characters. TYPOGRAPHY & FX ONLY.
+            
+            Visuals:
+            - Background: Dark city grid, rain-slicked textures, deep purple/magenta/cyan lighting.
+            - Text: "Glitch" effect or Neon Sign typography.
+            - Headline: "${titleText}" (Neon Blue).
+            - Hook: "${contentText}" (Hot Pink or Bright Yellow).
+            
+            ${footerInstruction}
+            Aspect Ratio: ${aspectRatio}.
+        ` : `
+            Role: Expert Digital Artist. Style: CYBERPUNK / NEON TRADER.
+            Task: Educational Slide.
+            
+            Layout:
+            1. Headline (Top): "${titleText}" - Neon style.
+            2. Text 1: "${contentText}" - HUD/Terminal font style.
+            3. Visual (Center): "${visualPrompt}" - Holographic, wireframe 3D chart, glowing edges.
+            4. Text 2: "${contentText}" - HUD style.
+            5. Footer.
+            
+            Palette: Black, Cyan, Magenta.
+            Aspect Ratio: ${aspectRatio}.
+        `;
+        break;
+
+    case 'LUXURY':
+        finalPrompt = isTitleSlide ? `
+            Role: Luxury Brand Designer. Style: HIGH-END PRESTIGE.
+            Task: Cover Image. TYPOGRAPHY ONLY.
+            
+            Visuals:
+            - Background: Black Marble, Silk texture, or Matte Black with Gold dust.
+            - Text: Serif fonts (Vogue/Rolex style). Elegant, expensive.
+            - Headline: "${titleText}" (Metallic Gold).
+            - Hook: "${contentText}" (White Serif).
+            
+            ${footerInstruction}
+            Aspect Ratio: ${aspectRatio}.
+        ` : `
+            Role: Luxury Brand Designer. Style: HIGH-END PRESTIGE.
+            Task: Educational Slide.
+            
+            Layout:
+            1. Headline (Top): "${titleText}" - Gold Serif.
+            2. Text 1: "${contentText}" - Elegant White.
+            3. Visual (Center): "${visualPrompt}" - Realistic, cinematic lighting, gold accents on charts.
+            4. Text 2: "${contentText}".
+            5. Footer.
+            
+            Palette: Black, Gold, White.
+            Aspect Ratio: ${aspectRatio}.
+        `;
+        break;
+
+    case 'MINIMALIST':
+        finalPrompt = isTitleSlide ? `
+            Role: Swiss Graphic Designer. Style: ULTRA MINIMALIST.
+            Task: Cover Image. TYPOGRAPHY ONLY.
+            
+            Visuals:
+            - Background: Off-white (#f8f9fa) or Very Light Grey.
+            - Text: Massive Bold Black Helvetica/Sans-Serif. High contrast.
+            - Headline: "${titleText}" (Black).
+            - Hook: "${contentText}" (Accent Color: International Orange or Royal Blue).
+            
+            ${footerInstruction} (Dark icons for visibility).
+            Aspect Ratio: ${aspectRatio}.
+        ` : `
+            Role: Swiss Graphic Designer. Style: ULTRA MINIMALIST.
+            Task: Educational Slide.
+            
+            Layout:
+            1. Headline (Top): "${titleText}" - Bold Black.
+            2. Text 1: "${contentText}" - Clean Dark Grey.
+            3. Visual (Center): "${visualPrompt}" - Flat vector, clean lines, isometric, no gradients.
+            4. Text 2: "${contentText}".
+            5. Footer.
+            
+            Palette: White background, Black text, One accent color.
+            Aspect Ratio: ${aspectRatio}.
+        `;
+        break;
+
+    case 'MODERN':
+        // Slate/Electric Blue Fintech
+        finalPrompt = isTitleSlide ? `
+          Role: Expert UI/UX Designer. Style: MODERN FINTECH.
+          Task: Cover Image. TYPOGRAPHY ONLY.
+          
+          Visuals:
+          - Background: Deep Slate Grey (#1e293b). Glassmorphism effects.
+          - Headline: "${titleText}" (White, Sans-Serif Bold).
+          - Hook: "${contentText}" (Electric Blue/Cyan).
+          
+          ${footerInstruction}
+          Aspect Ratio: ${aspectRatio}.
+        ` : `
+          Role: Expert UI/UX Designer. Style: MODERN FINTECH.
+          Task: Educational Slide.
+          
+          Layout:
+          1. Headline: "${titleText}" (White).
+          2. Text 1: "${contentText}".
+          3. Visual: "${visualPrompt}" - Abstract 3D, Gradient shapes, clean interface.
+          4. Text 2: "${contentText}".
+          5. Footer.
+          
+          Aspect Ratio: ${aspectRatio}.
+        `;
+        break;
+
+    case 'ORIGINAL':
+    default:
+        // Classic Navy/Gold
+        finalPrompt = isTitleSlide ? `
+            Role: Pro Trader Content Creator. Style: CLASSIC PRO.
+            Task: TEXT-ONLY Cover/Hook.
+            
+            Visuals:
+            - Background: Dark Navy/Black Gradient. Subtle chart patterns.
+            - Headline: "${titleText}" (White).
+            - Hook: "${contentText}" (Gold #FFD700). Very Large.
+            
+            ${footerInstruction}
+            Aspect Ratio: ${aspectRatio}.
+        ` : `
+            Role: Pro Trader Content Creator. Style: CLASSIC PRO.
+            Task: Educational Slide.
+            
+            Layout:
+            1. Headline: "${titleText}" (Gold/White).
+            2. Text 1: "${contentText}".
+            3. Visual: "${visualPrompt}" - Professional Trading Chart/Graph. Dark mode.
+            4. Text 2: "${contentText}".
+            5. Footer.
+            
+            Aspect Ratio: ${aspectRatio}.
+        `;
+        break;
+  }
+
+  // Switch to Imagen 3/4 (Image Gen 4 Ultra maps to imagen-4.0-generate-001)
+  const response = await ai.models.generateImages({
+    model: 'imagen-4.0-generate-001',
+    prompt: finalPrompt,
     config: {
-      imageConfig: {
-        aspectRatio: aspectRatio,
-        // imageSize is not supported in gemini-2.5-flash-image
-      }
+      numberOfImages: 1,
+      aspectRatio: aspectRatio,
+      outputMimeType: 'image/png',
     }
   });
 
-  // Extract image
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
-    }
+  const base64Data = response.generatedImages?.[0]?.image?.imageBytes;
+  if (base64Data) {
+    return `data:image/png;base64,${base64Data}`;
   }
 
   throw new Error("No image data found in response");
