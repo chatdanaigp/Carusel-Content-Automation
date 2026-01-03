@@ -1,7 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { generateContentIdeas, generateTradingSlides, generateInfographic, GEMINI_API_KEY } from './services/geminiService';
-import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea, UiDesignStyle, DesignStyle, DownloadMode, SocialConfig, CustomStyleConfig } from './types';
-import ApiKeyGuard from './components/ApiKeyGuard';
+import { generateContentIdeas, generateTradingSlides, generateInfographic, generateVisualPrompt, TEXT_MODEL, INTERNAL_IMAGE_MODEL_FALLBACK } from './services/geminiService';
+import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea, UiDesignStyle, DesignStyle, DownloadMode, SocialConfig, CustomStyleConfig, CustomTextInputMode } from './types';
 import SlideCard from './components/SlideCard';
 import ImageResult from './components/ImageResult';
 import SocialSettings from './components/SocialSettings';
@@ -12,9 +11,14 @@ const App: React.FC = () => {
   const [aspectRatio, setAspectRatio] = useState<string>('1:1');
   const [status, setStatus] = useState<WorkflowStatus>(WorkflowStatus.IDLE);
   
+  // New State for custom input
+  const [inputMode, setInputMode] = useState<CustomTextInputMode>(CustomTextInputMode.KEYWORD);
+  const [customTextInput, setCustomTextInput] = useState('');
+
   // Configuration States
   const [uiDesignStyle, setUiDesignStyle] = useState<UiDesignStyle>('ORIGINAL');
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('AUTO');
+  const [imageModel, setImageModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview'>('gemini-2.5-flash-image');
   
   // Custom Style State
   const [customStyleConfig, setCustomStyleConfig] = useState<CustomStyleConfig>({
@@ -70,20 +74,197 @@ const App: React.FC = () => {
       if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // STEP 1: Generate Ideas
-  const handleGenerateIdeas = async () => {
-    if (!topic.trim()) return;
-    setError(null);
-    setStatus(WorkflowStatus.GENERATING_IDEAS);
+  const handleResetWorkflow = () => {
+    setTopic('Mindset');
+    setLanguage('TH');
+    setAspectRatio('1:1');
+    setStatus(WorkflowStatus.IDLE);
+    setInputMode(CustomTextInputMode.KEYWORD);
+    setCustomTextInput('');
+    setUiDesignStyle('ORIGINAL');
+    setDownloadMode('AUTO');
+    setImageModel('gemini-2.5-flash-image');
+    setCustomStyleConfig({ prompt: '', referenceImage: null });
+    setSocialConfig({
+      useSameHandle: true,
+      masterHandle: 'crt.trader',
+      platforms: [
+          { id: 'tiktok', name: 'TikTok', iconName: 'TikTok Logo', selected: true, handle: 'crt.trader' },
+          { id: 'youtube', name: 'YouTube', iconName: 'YouTube Logo', selected: true, handle: 'crt.trader' },
+          { id: 'instagram', name: 'Instagram', iconName: 'Instagram Logo', selected: true, handle: 'crt.trader.official' },
+          { id: 'facebook', name: 'Facebook', iconName: 'Facebook Logo', selected: false, handle: '' },
+          { id: 'x', name: 'X', iconName: 'X (Twitter) Logo', selected: false, handle: '' },
+          { id: 'line', name: 'Line', iconName: 'Line App Logo', selected: false, handle: '' },
+      ]
+    });
+    setPreviewImage(null);
     setContentIdeas([]);
     setSelectedIdea(null);
     setSlides([]);
     setImages([]);
+    setError(null);
+  };
+
+
+  // Helper to parse custom text input
+  const parseCustomSlidesInput = (text: string): { slideTitle: string; slideContent: string }[] => {
+      const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+      const parsedSlides: { slideTitle: string; slideContent: string }[] = [];
+
+      // --- 1. Identify "Slide X" markers and their content blocks ---
+      const slideBlocks: { markerLine: string; contentLines: string[] }[] = [];
+      let currentContentBlock: string[] = [];
+      let currentMarkerLine: string | null = null;
+      let firstSlideMarkerIndex = -1;
+
+      for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (line.match(/^Slide \d+.*$/i)) {
+              if (firstSlideMarkerIndex === -1) {
+                  firstSlideMarkerIndex = i; // Mark the beginning of numbered slides
+              }
+              // If we have accumulated content for a previous slide, push it
+              if (currentMarkerLine !== null) {
+                  slideBlocks.push({
+                      markerLine: currentMarkerLine,
+                      contentLines: currentContentBlock,
+                  });
+              }
+              // Start a new slide block
+              currentMarkerLine = line;
+              currentContentBlock = [];
+          } else {
+              currentContentBlock.push(line);
+          }
+      }
+
+      // Push the last accumulated slide block
+      if (currentMarkerLine !== null) {
+          slideBlocks.push({
+              markerLine: currentMarkerLine,
+              contentLines: currentContentBlock,
+          });
+      }
+
+      // --- 2. Process Cover Slide (content before the first "Slide X" marker) ---
+      if (firstSlideMarkerIndex > 0) { // If there's content before the first "Slide X"
+          const coverContentLines = lines.slice(0, firstSlideMarkerIndex);
+          const coverContent = coverContentLines.filter(Boolean).join('\n').trim();
+          if (coverContent) {
+              parsedSlides.push({
+                  slideTitle: coverContent.split('\n')[0] || "Cover Slide", // First line as title
+                  slideContent: coverContent,
+              });
+          }
+      } else if (firstSlideMarkerIndex === -1 && lines.length > 0) {
+          // If no "Slide X" markers at all, treat the whole input as cover
+          const coverContent = lines.filter(Boolean).join('\n').trim();
+          if (coverContent) {
+              parsedSlides.push({
+                  slideTitle: coverContent.split('\n')[0] || "Cover Slide",
+                  slideContent: coverContent,
+              });
+          }
+      }
+
+
+      // --- 3. Process Numbered Slides ---
+      for (const block of slideBlocks) {
+          const fullContent = block.contentLines.filter(Boolean).join('\n').trim();
+          let slideTitle = block.markerLine.replace(/^Slide \d+\s*[:-]?\s*/i, '').trim(); // Try to get title from marker
+          if (!slideTitle && fullContent) {
+              slideTitle = fullContent.split('\n')[0]; // Fallback: first line of content
+          }
+          if (!slideTitle) {
+              slideTitle = `Slide ${parsedSlides.length + 1}`; // Final fallback
+          }
+          
+          parsedSlides.push({
+              slideTitle: slideTitle,
+              slideContent: fullContent,
+          });
+      }
+
+      // --- 4. Assign 1-based IDs ---
+      return parsedSlides.map((slide, index) => ({
+        ...slide,
+        id: index + 1
+      }));
+  };
+
+  // STEP 1: Generate Ideas / Process Custom Content
+  const handleGenerateContent = async () => {
+    setError(null);
+    setSlides([]);
+    setImages([]);
+    setSelectedIdea(null); // Clear selected idea
+
+    // Resolve the style for this generation session
+    let activeStyle: DesignStyle = 'ORIGINAL';
+    if (uiDesignStyle === 'RANDOM') {
+        const pool: DesignStyle[] = ['MODERN', 'CYBERPUNK', 'LUXURY', 'MINIMALIST'];
+        const randomIndex = Math.floor(Math.random() * pool.length);
+        activeStyle = pool[randomIndex];
+    } else {
+        activeStyle = uiDesignStyle as DesignStyle;
+    }
 
     try {
-      const ideas = await generateContentIdeas(topic, language);
-      setContentIdeas(ideas);
-      setStatus(WorkflowStatus.IDEAS_READY);
+      if (inputMode === CustomTextInputMode.KEYWORD) {
+        if (!topic.trim()) return;
+        setStatus(WorkflowStatus.GENERATING_IDEAS);
+        setContentIdeas([]);
+        const ideas = await generateContentIdeas(topic, language);
+        setContentIdeas(ideas);
+        setStatus(WorkflowStatus.IDEAS_READY);
+      } else { // CustomTextInputMode.CUSTOM_TEXT
+        if (!customTextInput.trim()) {
+            setError('Please enter your custom slide content.');
+            setStatus(WorkflowStatus.IDLE); // Added to clear status if input is empty
+            return;
+        }
+        setStatus(WorkflowStatus.GENERATING_SLIDES); // Directly generate slides
+        
+        const parsedSlides = parseCustomSlidesInput(customTextInput);
+        if (parsedSlides.length === 0) {
+            setError('No valid slides found in your custom content. Please check the format.');
+            setStatus(WorkflowStatus.IDLE);
+            return;
+        }
+
+        // Generate visual prompts for each custom slide
+        const slidesWithVisualPrompts: SlideContent[] = [];
+        for (let i = 0; i < parsedSlides.length; i++) {
+            const slide = parsedSlides[i];
+            const visualPrompt = await generateVisualPrompt(slide.slideTitle, slide.slideContent);
+            slidesWithVisualPrompts.push({
+                id: i + 1, // Start IDs from 1 for display
+                title: slide.slideTitle,
+                // FIX: Correctly map 'slideContent' to 'content' for the SlideContent interface.
+                content: slide.slideContent, 
+                visualPrompt: visualPrompt,
+            });
+            // Add a small delay between visual prompt generations to avoid rate limits
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        setSlides(slidesWithVisualPrompts);
+
+        // Treat custom content as a "selected idea" to proceed to image generation
+        setSelectedIdea({ 
+            id: 0, 
+            title: parsedSlides[0]?.slideTitle || "Custom Content Workflow", // Use the first slide's title as the overall idea title
+            summary: `Generated ${slidesWithVisualPrompts.length} slides from your input.` 
+        });
+
+        const initialImages: GeneratedImage[] = slidesWithVisualPrompts.map(s => ({
+            slideId: s.id,
+            imageUrl: '',
+            status: 'pending'
+        }));
+        setImages(initialImages);
+        
+        await generateImagesSequentially(slidesWithVisualPrompts, activeStyle, imageModel);
+      }
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
@@ -91,7 +272,7 @@ const App: React.FC = () => {
     }
   };
 
-  // STEP 2: Select Idea & Generate Slides -> Images
+  // STEP 2: Select Idea & Generate Slides -> Images (called for keyword mode)
   const handleSelectIdea = async (idea: ContentIdea) => {
     setSelectedIdea(idea);
     setStatus(WorkflowStatus.GENERATING_SLIDES);
@@ -120,7 +301,7 @@ const App: React.FC = () => {
       setImages(initialImages);
 
       // 2b. Start Image Generation with the resolved style
-      await generateImagesSequentially(generatedSlides, activeStyle);
+      await generateImagesSequentially(generatedSlides, activeStyle, imageModel);
 
     } catch (err) {
        console.error(err);
@@ -142,13 +323,14 @@ const App: React.FC = () => {
     }
   };
 
-  const generateImagesSequentially = async (slideData: SlideContent[], style: DesignStyle) => {
+  const generateImagesSequentially = async (slideData: SlideContent[], style: DesignStyle, selectedModel: 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview', currentCustomConfig?: CustomStyleConfig) => {
     setStatus(WorkflowStatus.GENERATING_IMAGES);
 
     // Using a loop to process sequentially to handle auth errors gracefully and rate limits
     for (let i = 0; i < slideData.length; i++) {
         const slide = slideData[i];
-        const isTitleSlide = i === 0; // Identify first slide
+        // isTitleSlide is true if it's the very first slide in the sequence (id === 1)
+        const isTitleSlide = (slide.id === 1); 
         
         // Update specific image to loading
         setImages(prev => prev.map(img => 
@@ -161,6 +343,9 @@ const App: React.FC = () => {
 
         while (attempts < maxAttempts && !success) {
             try {
+                // Determine which custom config to use: a new one for global style apply, or the current state's
+                const configToUse = currentCustomConfig || customStyleConfig;
+                
                 // Pass content text, isTitleSlide flag, design style AND social config
                 const base64Image = await generateInfographic(
                     slide.visualPrompt, 
@@ -170,7 +355,8 @@ const App: React.FC = () => {
                     isTitleSlide,
                     style,
                     socialConfig,
-                    customStyleConfig // Pass custom config
+                    configToUse,
+                    selectedModel // Pass the selected image model
                 );
                 
                 setImages(prev => prev.map(img => 
@@ -200,13 +386,16 @@ const App: React.FC = () => {
                 }
 
                 // Check for Permission Error
-                // ONLY handle dynamic key selection if we are NOT using a hardcoded key
-                const isHardcoded = GEMINI_API_KEY && GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE";
-                
-                if (isPermissionError(e) && !isHardcoded && window.aistudio?.openSelectKey) {
+                // Per guidelines, API key selection is handled via window.aistudio if available.
+                // If a permission error occurs AND window.aistudio.openSelectKey is available, prompt for key re-selection.
+                if (isPermissionError(e) && window.aistudio?.openSelectKey) {
                      try {
+                         console.warn(`Permission error for slide ${slide.id}. Prompting user to re-select API key via AI Studio...`);
                          await window.aistudio.openSelectKey();
-                         // Retry with same params immediately after new key selection
+                         // Per race condition guideline: assume key selection was successful and proceed.
+                         // Do not add delay. The next iteration/retry of generateInfographic will pick up the updated process.env.API_KEY.
+                         
+                         // We must retry the *entire* call with the potentially new API key.
                          const base64ImageRetry = await generateInfographic(
                             slide.visualPrompt, 
                             slide.title, 
@@ -215,22 +404,23 @@ const App: React.FC = () => {
                             isTitleSlide,
                             style,
                             socialConfig,
-                            customStyleConfig
+                            (currentCustomConfig || customStyleConfig),
+                            selectedModel 
                          );
                          setImages(prev => prev.map(img => 
                             img.slideId === slide.id ? { ...img, status: 'success', imageUrl: base64ImageRetry } : img
                          ));
                          success = true;
-                         // Wait after success
                          if (i < slideData.length - 1) {
                             await new Promise(resolve => setTimeout(resolve, 10000));
                          }
                      } catch (retryError: any) {
+                         // If re-selection itself fails or the subsequent retry still gets permission denied.
                          if (isPermissionError(retryError)) {
                             setImages(prev => prev.map(img => 
                                 img.slideId === slide.id ? { ...img, status: 'error' } : img
                             ));
-                            setError("Permission denied. Billing enabled project required.");
+                            setError("Permission denied even after API key selection. Ensure a billing-enabled project is used.");
                             setStatus(WorkflowStatus.IDLE); 
                             return; // Stop the entire process
                          }
@@ -241,7 +431,7 @@ const App: React.FC = () => {
                 if (success) break;
 
                 // If not 429/503 and not permission error (or permission fix failed), log and break.
-                console.error(`Failed to generate image for slide ${slide.id}`, e);
+                console.error(`Failed to generate image for slide ${slide.id}:`, e);
                 break;
             }
         }
@@ -256,20 +446,79 @@ const App: React.FC = () => {
     setStatus(WorkflowStatus.COMPLETED);
   };
 
-  const handleChangeKey = async () => {
-      if (window.aistudio?.openSelectKey) {
-          await window.aistudio.openSelectKey();
-      } else {
-          alert("API Key selection is not available in this environment.");
-      }
+  const handleRepromptImage = async (slideId: number, newPrompt: string) => {
+    setError(null);
+    setSlides(prevSlides => prevSlides.map(s => s.id === slideId ? { ...s, visualPrompt: newPrompt } : s));
+    setImages(prevImages => prevImages.map(img => img.slideId === slideId ? { ...img, status: 'loading' } : img));
+
+    try {
+        const targetSlide = slides.find(s => s.id === slideId);
+        if (!targetSlide) throw new Error("Slide not found for reprompt.");
+
+        let activeStyle: DesignStyle = 'ORIGINAL';
+        if (uiDesignStyle === 'RANDOM') {
+            const pool: DesignStyle[] = ['MODERN', 'CYBERPUNK', 'LUXURY', 'MINIMALIST'];
+            const randomIndex = Math.floor(Math.random() * pool.length);
+            activeStyle = pool[randomIndex];
+        } else {
+            activeStyle = uiDesignStyle as DesignStyle;
+        }
+
+        const isTitleSlide = slideId === 1; // Assuming first slide is always id 1
+        const base64Image = await generateInfographic(
+            newPrompt,
+            targetSlide.title,
+            targetSlide.content,
+            aspectRatio,
+            isTitleSlide,
+            activeStyle,
+            socialConfig,
+            customStyleConfig,
+            imageModel // Pass the selected image model
+        );
+
+        setImages(prevImages => prevImages.map(img => 
+            img.slideId === slideId ? { ...img, status: 'success', imageUrl: base64Image } : img
+        ));
+    } catch (e: any) {
+        console.error("Error reprompting image:", e);
+        setError(e instanceof Error ? e.message : 'Failed to regenerate image with new prompt.');
+        setImages(prevImages => prevImages.map(img => img.slideId === slideId ? { ...img, status: 'error' } : img));
+    }
   };
 
-  // Determine if we should show the "Change API Key" button
-  // Only show if we are NOT using a hardcoded key
-  const isHardcodedKeySet = GEMINI_API_KEY && GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE";
+  const handleApplyStyleToAll = async (sourceSlideId: number) => {
+    setError(null);
+    setStatus(WorkflowStatus.GENERATING_IMAGES); // Indicate re-generation of all images
+
+    const sourceImage = images.find(img => img.slideId === sourceSlideId);
+    const sourceSlide = slides.find(s => s.id === sourceSlideId);
+
+    if (!sourceImage || !sourceImage.imageUrl || !sourceSlide) {
+      setError("Could not find source image or slide to apply style from.");
+      setStatus(WorkflowStatus.IDLE);
+      return;
+    }
+
+    // Update custom style config based on the source image/prompt
+    const newCustomStyleConfig: CustomStyleConfig = {
+      referenceImage: sourceImage.imageUrl,
+      prompt: sourceSlide.visualPrompt, // Use the visual prompt of the source slide
+    };
+
+    setUiDesignStyle('CUSTOM'); // Force custom style mode
+    setCustomStyleConfig(newCustomStyleConfig); // Set new custom config
+
+    // Regenerate all images with the new custom style
+    // The generateImagesSequentially function will pick up the updated customStyleConfig
+    // Note: It's important to pass newCustomStyleConfig directly if state updates are asynchronous
+    await generateImagesSequentially(slides, 'CUSTOM', imageModel, newCustomStyleConfig);
+  };
+
 
   // UI Helpers
   const isGenerating = status === WorkflowStatus.GENERATING_IDEAS || status === WorkflowStatus.GENERATING_SLIDES || status === WorkflowStatus.GENERATING_IMAGES;
+  const isGeneratingAllImages = status === WorkflowStatus.GENERATING_IMAGES; // To disable controls during global re-generation
   
   const ratioOptions = [
       { id: '1:1', label: 'Square (1:1)', desc: '1080x1080px' },
@@ -278,8 +527,7 @@ const App: React.FC = () => {
   ];
 
   return (
-    <ApiKeyGuard>
-      <div className="min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-blue-500/30">
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-blue-500/30">
         
         {/* Header */}
         <header className="bg-slate-900/50 border-b border-slate-800 sticky top-0 z-50 backdrop-blur-md">
@@ -292,20 +540,11 @@ const App: React.FC = () => {
                 TradingFlow AI
               </h1>
             </div>
-            <div className="flex items-center gap-4">
-                 {!isHardcodedKeySet && (
-                     <button 
-                        onClick={handleChangeKey}
-                        className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1 rounded transition-all"
-                     >
-                        Change API Key
-                     </button>
-                 )}
-                 {isHardcodedKeySet && (
-                    <span className="text-xs text-emerald-500 font-mono bg-emerald-900/20 px-2 py-1 rounded border border-emerald-900/50">
-                        API Key Configured
-                    </span>
-                 )}
+            {/* Model names - Updated for minimalist style */}
+            <div className="flex items-center gap-4 text-xs font-sans text-slate-400">
+                <span>Text: {TEXT_MODEL}</span>
+                {/* Removed INTERNAL_IMAGE_MODEL_FALLBACK from UI display, as it's an internal fallback */}
+                <span>Image: {imageModel === 'gemini-2.5-flash-image' ? 'Gemini 2.5 Flash' : 'Gemini 3 Pro Image'}</span>
             </div>
           </div>
         </header>
@@ -319,8 +558,36 @@ const App: React.FC = () => {
                 <>
                 <h2 className="text-3xl font-bold mb-4">Content Idea Generator</h2>
                 <p className="text-slate-400 mb-8">
-                Enter a keyword to generate catchy trading content ideas (Step 1 of 2)
+                Generate content ideas or directly input custom slide content.
                 </p>
+
+                {/* Input Mode Toggle */}
+                <div className="flex justify-center mb-6">
+                    <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                        <button
+                            onClick={() => setInputMode(CustomTextInputMode.KEYWORD)}
+                            disabled={isGenerating}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                inputMode === CustomTextInputMode.KEYWORD 
+                                ? 'bg-indigo-600 text-white shadow' 
+                                : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                            }`}
+                        >
+                            Keyword Ideas
+                        </button>
+                        <button
+                            onClick={() => setInputMode(CustomTextInputMode.CUSTOM_TEXT)}
+                            disabled={isGenerating}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                inputMode === CustomTextInputMode.CUSTOM_TEXT 
+                                ? 'bg-indigo-600 text-white shadow' 
+                                : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                            }`}
+                        >
+                            Custom Content
+                        </button>
+                    </div>
+                </div>
 
                 {/* Controls Container */}
                 <div className="flex flex-col gap-6 mb-8 items-center bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50">
@@ -516,6 +783,42 @@ const App: React.FC = () => {
 
                     <div className="w-full h-px bg-slate-700/50"></div>
 
+                    {/* Image Model Selection */}
+                    <div className="flex flex-col items-center gap-2 w-full">
+                        <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Image Model</label>
+                        <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                            <button
+                                onClick={() => setImageModel('gemini-2.5-flash-image')}
+                                disabled={isGenerating}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                    imageModel === 'gemini-2.5-flash-image' 
+                                    ? 'bg-purple-600 text-white shadow' 
+                                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                }`}
+                            >
+                                <span className="mr-1">🚀</span> Gemini 2.5 Flash (Free)
+                            </button>
+                            <button
+                                onClick={() => setImageModel('gemini-3-pro-image-preview')}
+                                disabled={isGenerating}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                    imageModel === 'gemini-3-pro-image-preview' 
+                                    ? 'bg-purple-600 text-white shadow' 
+                                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                }`}
+                            >
+                                <span className="mr-1">💎</span> Gemini 3 Pro Image (Paid)
+                            </button>
+                        </div>
+                        {imageModel === 'gemini-3-pro-image-preview' && (
+                            <p className="text-[10px] text-orange-400 mt-1">
+                                Using Gemini 3 Pro Image requires a Google Cloud project with billing enabled.
+                            </p>
+                        )}
+                    </div>
+
+                    <div className="w-full h-px bg-slate-700/50"></div>
+
                     {/* Social Media Settings */}
                     <SocialSettings 
                         config={socialConfig} 
@@ -548,41 +851,93 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                <div className="flex gap-2 p-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg">
-                <input 
-                    type="text" 
-                    value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
-                    placeholder="Enter keyword (e.g. Mindset, Risk, Sniper Entry)"
-                    disabled={isGenerating}
-                    className="flex-1 bg-transparent border-none outline-none px-4 py-2 text-white placeholder-slate-500"
-                    onKeyDown={(e) => e.key === 'Enter' && handleGenerateIdeas()}
-                />
-                <button
-                    onClick={handleGenerateIdeas}
-                    disabled={isGenerating || !topic.trim()}
-                    className={`
-                    px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2
-                    ${!isGenerating && topic.trim()
-                        ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' 
-                        : 'bg-slate-700 text-slate-400 cursor-not-allowed'}
-                    `}
-                >
-                    {status === WorkflowStatus.GENERATING_IDEAS ? (
-                        <>
-                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Thinking...
-                        </>
-                    ) : (
-                        <>
-                            <span>Generate Ideas</span>
-                        </>
-                    )}
-                </button>
-                </div>
+                {inputMode === CustomTextInputMode.KEYWORD ? (
+                    <div className="flex gap-2 p-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg">
+                        <input 
+                            type="text" 
+                            value={topic}
+                            onChange={(e) => setTopic(e.target.value)}
+                            placeholder="Enter keyword (e.g. Mindset, Risk, Sniper Entry)"
+                            disabled={isGenerating}
+                            className="flex-1 bg-transparent border-none outline-none px-4 py-2 text-white placeholder-slate-500"
+                            onKeyDown={(e) => e.key === 'Enter' && handleGenerateContent()}
+                        />
+                        <button
+                            onClick={handleGenerateContent}
+                            disabled={isGenerating || !topic.trim()}
+                            className={`
+                            px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2
+                            ${!isGenerating && topic.trim()
+                                ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' 
+                                : 'bg-slate-700 text-slate-400 cursor-not-allowed'}
+                            `}
+                        >
+                            {status === WorkflowStatus.GENERATING_IDEAS ? (
+                                <>
+                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Thinking...
+                                </>
+                            ) : (
+                                <>
+                                    <span>Generate Ideas</span>
+                                </>
+                            )}
+                        </button>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-4 p-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg">
+                        <textarea
+                            value={customTextInput}
+                            onChange={(e) => setCustomTextInput(e.target.value)}
+                            placeholder={`Enter your custom slide content here.
+The first line will be the overall carousel title (and cover slide title).
+
+Use "Slide X: [Your Title]" to define new slides, where X is a number.
+Content for the slide follows until the next "Slide X" or end of input.
+
+Example:
+Pro Guide to Trading Non-Farm Payroll (NFP)
+This text before Slide 1 will be the cover image!
+
+Slide 1: How to Trade NFP Without Blowing Your Account!
+Headline: This is the actual headline for Slide 1.
+Visual: A massive candlestick chart (spike) + a Bomb icon 💣
+Sub-headline: The survival guide for Gold Traders.
+
+Slide 2: What is Non-Farm Payroll?
+Content: Forex (FX) is the global marketplace for exchanging national currencies. It's the largest market in the world...`}
+                            disabled={isGenerating}
+                            className="flex-1 bg-transparent border border-slate-700 rounded-lg outline-none px-4 py-3 text-white placeholder-slate-500 min-h-[200px]"
+                        />
+                        <button
+                            onClick={handleGenerateContent}
+                            disabled={isGenerating || !customTextInput.trim()}
+                            className={`
+                            px-6 py-2 rounded-lg font-semibold transition-all flex items-center justify-center gap-2
+                            ${!isGenerating && customTextInput.trim()
+                                ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' 
+                                : 'bg-slate-700 text-slate-400 cursor-not-allowed'}
+                            `}
+                        >
+                            {isGenerating ? (
+                                <>
+                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Processing Content...
+                                </>
+                            ) : (
+                                <>
+                                    <span>Generate Slides & Images</span>
+                                </>
+                            )}
+                        </button>
+                    </div>
+                )}
                 </>
             )}
 
@@ -603,6 +958,7 @@ const App: React.FC = () => {
                         <button
                             key={idea.id}
                             onClick={() => handleSelectIdea(idea)}
+                            disabled={isGenerating}
                             className="bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-blue-500/50 p-6 rounded-xl text-left transition-all hover:scale-[1.01] hover:shadow-xl group"
                         >
                             <h4 className="text-lg font-bold text-white group-hover:text-blue-400 mb-2">{idea.title}</h4>
@@ -623,13 +979,12 @@ const App: React.FC = () => {
                  <div className="flex items-center justify-between mb-8 pb-4 border-b border-slate-800">
                     <div>
                         <button 
-                            onClick={() => {
-                                setSelectedIdea(null);
-                                setStatus(WorkflowStatus.IDEAS_READY);
-                            }}
-                            className="text-xs text-slate-500 hover:text-white mb-1 flex items-center gap-1"
+                            onClick={handleResetWorkflow}
+                            className="text-xs text-slate-500 hover:text-white mb-1 flex items-center gap-1 px-3 py-1 bg-slate-800 rounded-md border border-slate-700 hover:border-slate-500 transition-colors"
+                            disabled={isGenerating}
                         >
-                            &larr; Back to Ideas
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0" /></svg>
+                            Start New Workflow
                         </button>
                         <h2 className="text-2xl font-bold text-white">{selectedIdea.title}</h2>
                         <div className="flex items-center gap-2 mt-1">
@@ -669,7 +1024,18 @@ const App: React.FC = () => {
                         return (
                         <div key={slide.id} className="flex flex-col gap-4">
                             <SlideCard slide={slide} />
-                            {img && <ImageResult image={img} downloadMode={downloadMode} onPreview={(url) => setPreviewImage(url)} aspectRatio={aspectRatio} />}
+                            {img && 
+                                <ImageResult 
+                                    image={img} 
+                                    downloadMode={downloadMode} 
+                                    onPreview={(url) => setPreviewImage(url)} 
+                                    aspectRatio={aspectRatio}
+                                    currentVisualPrompt={slide.visualPrompt} // Pass current prompt
+                                    onRepromptImage={handleRepromptImage}
+                                    onApplyStyleToAll={handleApplyStyleToAll}
+                                    isGeneratingAll={isGeneratingAllImages}
+                                />
+                            }
                         </div>
                         );
                     })}
@@ -715,7 +1081,6 @@ const App: React.FC = () => {
 
         </main>
       </div>
-    </ApiKeyGuard>
   );
 };
 

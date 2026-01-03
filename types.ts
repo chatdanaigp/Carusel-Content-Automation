@@ -1,4 +1,5 @@
 
+
 export interface ContentIdea {
   id: number;
   title: string;
@@ -51,9 +52,31 @@ export enum WorkflowStatus {
   COMPLETED = 'COMPLETED',
 }
 
+export enum CustomTextInputMode {
+  KEYWORD = 'KEYWORD',
+  CUSTOM_TEXT = 'CUSTOM_TEXT',
+}
+
+// FIX: To resolve the "Subsequent property declarations must have the same type" error for 'aistudio',
+// and because the error message explicitly indicates that the property expects type 'AIStudio',
+// we define the 'AIStudio' interface and then reference it within the global Window interface.
+// This ensures a consistent type definition for 'window.aistudio'.
+// Update: Inlining the interface definition directly into 'Window' to bypass potential
+// subtle conflicts that might arise from named interface merging in complex environments.
+interface AIStudio {
+  hasSelectedApiKey: () => Promise<boolean>;
+  openSelectKey: () => Promise<void>;
+}
+
 declare global {
-  interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
+  interface Window {
+    aistudio?: AIStudio;
+    process?: {
+      env: {
+        API_KEY?: string;
+        REACT_APP_API_KEY?: string; // For Create React App
+        [key: string]: string | undefined;
+      };
+    };
   }
 }

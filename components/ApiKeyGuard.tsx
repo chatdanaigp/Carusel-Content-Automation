@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { GEMINI_API_KEY } from '../services/geminiService';
+// REMOVED: import { GEMINI_API_KEY } from '../services/geminiService';
 
 interface ApiKeyGuardProps {
   children: React.ReactNode;
@@ -11,25 +11,21 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
 
   const checkKey = async () => {
     try {
-      // 1. Check if user provided a hardcoded key in the code (Prioritize this for deployment)
-      if (GEMINI_API_KEY && GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE") {
-        setHasKey(true);
-        setLoading(false);
-        return;
-      }
-
-      // 2. Fallback to existing mechanisms (window injection or build-time env)
+      // Per coding guidelines, if window.aistudio is present, it is the authoritative source for API key selection status.
       if (window.aistudio && window.aistudio.hasSelectedApiKey) {
         const selected = await window.aistudio.hasSelectedApiKey();
         setHasKey(selected);
+        // We assume that if hasSelectedApiKey is true, then process.env.API_KEY will be populated.
       } else {
-        // Fallback for Vercel/Browser shim if checking localStorage directly via shim logic
-        // But since we updated index.html shim, window.aistudio should exist.
-        // If not, use process.env check
-        setHasKey(!!process.env.API_KEY || !!localStorage.getItem('gemini_api_key')); 
+        // If window.aistudio is not available, we must assume process.env.API_KEY
+        // is directly configured in the environment (e.g., for non-browser builds, or a pre-bundled app).
+        // Per guidelines, process.env.API_KEY is assumed to be pre-configured and accessible.
+        setHasKey(!!process.env.API_KEY);
       }
     } catch (e) {
       console.error("Error checking API key", e);
+      // Fallback: Even on error, attempt to check process.env.API_KEY if window.aistudio wasn't the primary source.
+      setHasKey(!!process.env.API_KEY);
     } finally {
       setLoading(false);
     }
@@ -42,9 +38,10 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
   const handleSelectKey = async () => {
     if (window.aistudio && window.aistudio.openSelectKey) {
       await window.aistudio.openSelectKey();
-      // Re-check key after selection
-      const selected = await window.aistudio.hasSelectedApiKey();
-      setHasKey(selected);
+      // FIX: Per race condition guideline, assume key selection was successful after triggering `openSelectKey()`.
+      // Do not re-call hasSelectedApiKey() here as it might not reflect the update immediately.
+      // The subsequent API call will create a new GoogleGenAI instance which will pick up the updated process.env.API_KEY.
+      setHasKey(true);
     }
   };
 

@@ -3,32 +3,35 @@ import { SlideContent, ContentIdea, DesignStyle, SocialConfig, CustomStyleConfig
 
 // =============================================================================================
 // 🔑 API KEY CONFIGURATION
-// Security Warning: Do NOT hardcode your API Key here if pushing to GitHub.
-// For Vercel/Production: Set the 'API_KEY' environment variable in your project settings.
-// =============================================================================================
-export const GEMINI_API_KEY: string = ""; 
+// Removed hardcoded GEMINI_API_KEY as per coding guidelines.
+// The API key must be obtained exclusively from process.env.API_KEY.
 // =============================================================================================
 
 // Helper to initialize AI client. 
 const getAiClient = () => {
-  // Priority:
-  // 1. Environment Variable (Vercel Build Time)
-  // 2. LocalStorage (Shim for Browser/Vercel Runtime)
-  // 3. Hardcoded (Local Dev)
-  const apiKey = process.env.API_KEY || 
-                 localStorage.getItem('gemini_api_key') || 
-                 (GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : "");
+  // Per coding guidelines, the API key must be obtained exclusively from process.env.API_KEY.
+  // We assume this variable is pre-configured, valid, and accessible.
+  const apiKey = process.env.API_KEY;
   
+  if (!apiKey) {
+    // This console error should ideally not be reached if ApiKeyGuard functions correctly
+    // or if the environment variable is properly pre-configured as assumed by guidelines.
+    console.error("API_KEY is not defined. Ensure it's set in your environment or selected via AI Studio.");
+  }
+
+  // Create a new GoogleGenAI instance right before making an API call to ensure
+  // it always uses the most up-to-date API key from the dialog (if applicable).
   return new GoogleGenAI({ apiKey: apiKey || "" });
 };
 
 // 🔥 MODEL CONFIGURATION
 // Text: Using Gemini 3 Flash Preview as requested ("3.0")
-const TEXT_MODEL = 'gemini-3-flash-preview'; 
+export const TEXT_MODEL = 'gemini-3-flash-preview'; 
 
-// Image: Primary is 2.5 Flash Image ("2.5"), Fallback is 2.0 Flash Exp for stability
-const IMAGE_MODEL_PRIMARY = 'gemini-2.5-flash-image';
-const IMAGE_MODEL_FALLBACK = 'gemini-2.0-flash-exp';
+// FIX: Updated INTERNAL_IMAGE_MODEL_FALLBACK to an allowed model ('gemini-2.5-flash-image')
+// and removed the deprecated 'gemini-2.0-flash-exp'. This resolves the type overlap error
+// and adheres to coding guidelines for image models.
+export const INTERNAL_IMAGE_MODEL_FALLBACK = 'gemini-2.5-flash-image';
 
 export const generateContentIdeas = async (keyword: string, language: 'TH' | 'EN'): Promise<ContentIdea[]> => {
   const ai = getAiClient();
@@ -131,6 +134,50 @@ export const generateTradingSlides = async (selectedIdea: ContentIdea, language:
   }));
 };
 
+// New function to generate visual prompts from custom slide content
+export const generateVisualPrompt = async (title: string, content: string): Promise<string> => {
+  const ai = getAiClient();
+  const maxAttempts = 5; // Increased max attempts
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    try {
+      const prompt = `
+        Given the following slide title and content, generate a concise and descriptive visual prompt (in English) for an AI image generator. 
+        Focus on key elements, mood, and relevant imagery for a trading-related infographic.
+        
+        Title: "${title}"
+        Content: "${content}"
+        
+        Respond only with the visual prompt.
+        Visual Prompt (max 20 words):
+      `;
+
+      const response = await ai.models.generateContent({
+        model: TEXT_MODEL,
+        contents: prompt,
+        config: {
+          temperature: 0.7,
+          maxOutputTokens: 50, // Keep prompt short
+        },
+      });
+
+      if (response.text && response.text.trim()) {
+        return response.text.trim();
+      } else {
+        console.warn(`Attempt ${attempts + 1} failed: No visual prompt text returned for title "${title}". Retrying...`);
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, 3000 * attempts)); // Increased exponential backoff delay
+      }
+    } catch (e: any) {
+      console.error(`Attempt ${attempts + 1} failed to generate visual prompt for title "${title}":`, e);
+      attempts++;
+      await new Promise(resolve => setTimeout(resolve, 3000 * attempts)); // Increased exponential backoff delay
+    }
+  }
+  throw new Error(`Failed to generate visual prompt for title "${title}" after ${maxAttempts} attempts.`);
+};
+
 export const generateInfographic = async (
   visualPrompt: string, 
   titleText: string, 
@@ -139,7 +186,8 @@ export const generateInfographic = async (
   isTitleSlide: boolean = false,
   style: DesignStyle = 'ORIGINAL',
   socialConfig?: SocialConfig,
-  customConfig?: CustomStyleConfig
+  customConfig?: CustomStyleConfig,
+  selectedImageModel: 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' = 'gemini-2.5-flash-image' // New param with default
 ): Promise<string> => {
   const ai = getAiClient();
 
@@ -179,20 +227,16 @@ export const generateInfographic = async (
   if (socialConfig) {
       const activePlatforms = socialConfig.platforms.filter(p => p.selected);
       if (activePlatforms.length > 0) {
-          // Force construct distinct pairs: [Icon] [Name]
-          const footerPairs = activePlatforms.map(p => {
+          // More general instruction for the image model.
+          // The final rendering might not be perfect from the image model, but it tries.
+          const footerElements = activePlatforms.map(p => {
               const handle = socialConfig.useSameHandle ? socialConfig.masterHandle : p.handle;
-              return `[${p.iconName} Icon] "${handle}"`;
-          }).join("      "); // Large space in string to hint separation
+              return `${p.name} (@${handle})`; // Example: TikTok (@crt.trader)
+          }).join(" / "); 
 
           footerInstruction = `
-          FOOTER INSTRUCTION (Strict Layout):
-          - Position: Bottom edge of the image.
-          - Layout: Horizontal row.
-          - CONTENT: ${footerPairs}
-          - CRITICAL RULE: Render EXACTLY as pairs. One Icon + One Name. Do NOT group icons.
-          - VISUAL STYLE: Icons must be ${iconStyle}. Font must be small, clean, sans-serif.
-          - Example Look: [TikTok Logo] @user      [IG Logo] @user
+          Include subtle social media icons and the following handles at the very bottom: ${footerElements}.
+          Ensure the icons are ${iconStyle} and text is small and legible.
           `;
       }
   }
@@ -225,20 +269,21 @@ export const generateInfographic = async (
   }
 
   // 4. Image Generation Prompt (Full Detail)
+  // Revised Full Prompt - less demanding on exact text rendering by the image model
   const fullPrompt = `
-    Generate a high-quality, photorealistic infographic image for social media.
+    Generate a high-quality, visually appealing infographic image suitable for a social media carousel.
     
-    TEXT CONTENT TO RENDER (Must be spelled correctly and legible):
-    - HEADLINE (Large & Dominant): "${titleText}"
-    - BODY (Readable): "${contentText}"
+    **Primary Visual Theme:** Based on "${finalVisualPrompt}".
+    
+    **Integrate the following text elements legibly within the image:**
+    - **Main Headline (prominent):** "${titleText}"
+    - **Supporting Text (clear):** "${contentText}"
     
     ${footerInstruction}
     
-    VISUAL CONTEXT:
-    ${finalVisualPrompt}
-    
-    DESIGN DIRECTIVES:
+    **Overall Design Directives:**
     ${finalDesignDirectives}
+    - Ensure the composition is balanced and professional.
   `;
 
   // Construct parts for Full Prompt
@@ -258,9 +303,9 @@ export const generateInfographic = async (
   }
 
   // 5. Execution with Fallback Logic
-  const generate = async (modelName: string, promptParts: any[], allowRateLimitFallback: boolean = false) => {
+  const performGenerate = async (modelName: string, promptParts: any[], attemptType: 'full' | 'simplified', allowRateLimitPropagation: boolean = false) => {
       try {
-        console.log(`Attempting image generation with model: ${modelName}`);
+        console.log(`Attempting image generation with model: ${modelName}, prompt type: ${attemptType}`);
         
         // MAPPING ASPECT RATIO
         let targetRatio = aspectRatio;
@@ -287,57 +332,56 @@ export const generateInfographic = async (
         }
         
         if (response.text) {
-             console.warn(`Model ${modelName} returned text instead of image:`, response.text);
+             console.warn(`Model ${modelName} returned text instead of image (${attemptType}):`, response.text);
         }
         
-        return null;
+        return null; // No image data found
       } catch (e: any) {
-          // IMPORTANT: Propagate Rate Limits so App.tsx can handle backoff
-          // If allowRateLimitFallback is true, we return null to let the next model attempt run
-          // If false, we throw so App.tsx can pause and retry
           if (e.message?.includes('429') || e.message?.includes('RESOURCE_EXHAUSTED')) {
-              if (allowRateLimitFallback) {
-                  console.warn(`Model ${modelName} hit rate limit (429). Attempting fallback...`);
-                  return null;
+              if (allowRateLimitPropagation) {
+                  throw e; // Propagate 429 to App.tsx for external backoff
+              } else {
+                  console.warn(`Model ${modelName} hit rate limit (429) for ${attemptType} prompt. Internal fallback will be attempted.`);
+                  return null; // Allow internal fallback
               }
-              throw e;
           }
-          console.warn(`Error with model ${modelName}:`, e);
+          // For other errors (e.g., 403, content safety), log and return null to try next attempt or fail.
+          console.warn(`Error with model ${modelName} for ${attemptType} prompt:`, e);
           return null;
       }
   };
 
-  // Attempt 1: Primary Model (2.5) - Full Prompt
-  // Allow fallback on 429
-  let image = await generate(IMAGE_MODEL_PRIMARY, fullParts, true);
+  let image = null;
 
-  // Attempt 2: Fallback Model (2.0) - Full Prompt
-  // Allow fallback on 429
-  if (!image) {
-      console.log("Attempt 1 failed. Switching to fallback model...");
-      image = await generate(IMAGE_MODEL_FALLBACK, fullParts, true);
+  // 1. Try selectedImageModel with full prompt
+  image = await performGenerate(selectedImageModel, fullParts, 'full', false); 
+  
+  // 2. If selectedImageModel failed, try internal fallback (if different)
+  if (!image && selectedImageModel !== INTERNAL_IMAGE_MODEL_FALLBACK) {
+      console.log(`Initial attempt with ${selectedImageModel} failed. Trying internal fallback ${INTERNAL_IMAGE_MODEL_FALLBACK}...`);
+      image = await performGenerate(INTERNAL_IMAGE_MODEL_FALLBACK, fullParts, 'full', false);
   }
 
-  // Attempt 3: Primary Model (2.5) - Simplified Prompt (No Body Text, But keep Visual Footer)
-  // If we reach here and hit 429, we MUST throw to trigger the backoff delay in App.tsx
+  // 3. If still no image, try selectedImageModel with SIMPLIFIED prompt.
+  // If this fails with 429, it means we've exhausted all options for this generation cycle,
+  // so propagate to App.tsx for external retry logic.
   if (!image) {
-      console.log("Attempt 2 failed. Switching to SIMPLIFIED prompt (Text-Free Body)...");
-      
+      console.log("All full prompt attempts failed. Trying SIMPLIFIED prompt...");
+      // Revised Simplified Prompt - less demanding for fallback
       const simplePrompt = `
-        Create a high-quality illustration.
+        Generate a high-quality illustrative image, serving as a background for an infographic.
         
-        Visual Description: ${finalVisualPrompt}
+        **Visual Concept:** "${finalVisualPrompt}"
         
-        ${footerInstruction}
-        (Render the icons and handle clearly at the bottom as specified)
+        ${footerInstruction} (Ensure icons and handles are present and subtle at the bottom).
         
-        Style: ${styleInstruction}
-        
-        Requirements: High resolution, photorealistic, professional composition. No main body text overlay, but INCLUDE the footer elements.
+        **Design Attributes:**
+        ${finalDesignDirectives}
+        - Avoid overcrowding. Focus on the core visual theme.
+        - No need to integrate specific main headline or body text overlay; design primarily for background.
       `;
 
       const simpleParts: any[] = [{ text: simplePrompt }];
-      // Re-add reference image if exists
       if (style === 'CUSTOM' && customConfig?.referenceImage) {
            const base64Data = customConfig.referenceImage.split(',')[1];
            const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
@@ -350,12 +394,11 @@ export const generateInfographic = async (
                 });
            }
       }
-
-      image = await generate(IMAGE_MODEL_PRIMARY, simpleParts, false);
+      image = await performGenerate(selectedImageModel, simpleParts, 'simplified', true); // Propagate 429 if this fails
   }
 
   if (!image) {
-      throw new Error(`Failed to generate image after 3 attempts. Please try a different topic or style.`);
+      throw new Error(`Failed to generate image after multiple attempts. Please try a different topic or style.`);
   }
 
   return image;

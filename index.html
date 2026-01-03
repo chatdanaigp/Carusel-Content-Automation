@@ -3,47 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TradingGen AI Workflow</title>
+    <title>TradingFlow GenAI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       // =================================================================
-      // Vercel / Client-Side Deployment Shim
+      // Vercel / Client-Side Deployment Shim for process.env
       // =================================================================
-      // This script allows the user to input their API key securely in the browser
-      // without hardcoding it in the source code.
+      // This script ensures `window.process.env` is available in browser environments
+      // and ensures `process.env.API_KEY` is loaded from the build environment (e.g., Vercel)
+      // or set by `window.aistudio.openSelectKey()`.
+      // It strictly adheres to the @google/genai coding guidelines regarding API key access.
       // =================================================================
       (function() {
-        const STORAGE_KEY = 'gemini_api_key';
-
         // 1. Polyfill process.env if it doesn't exist (common in Vite/Browser)
         if (!window.process) window.process = { env: {} };
         if (!window.process.env) window.process.env = {};
 
-        // 2. Load Key from LocalStorage if available
-        const storedKey = localStorage.getItem(STORAGE_KEY);
-        if (storedKey) {
-            window.process.env.API_KEY = storedKey;
-        }
+        // 2. IMPORTANT: Do NOT load or save API key from/to localStorage here.
+        // As per @google/genai coding guidelines:
+        // - The API key must be obtained *exclusively* from `process.env.API_KEY`.
+        // - Do *not* generate any UI elements (input fields, forms, prompts) for entering or managing the API key.
+        // - `window.aistudio.hasSelectedApiKey()` and `window.aistudio.openSelectKey()` are assumed to be
+        //   pre-configured and valid for interactive selection when using paid models.
+        //
+        // Therefore, the shim ensures `process.env` exists, and if `window.aistudio` is not present,
+        // it assumes `process.env.API_KEY` would be provided directly by the build environment.
+        // The `ApiKeyGuard` component then handles the interaction with `window.aistudio` if it exists.
 
-        // 3. Mock window.aistudio to handle Key Selection Flow
-        if (!window.aistudio) {
-            window.aistudio = {
-               // Check if we have a key in storage or env
-               hasSelectedApiKey: async () => {
-                   return !!(window.process.env.API_KEY || localStorage.getItem(STORAGE_KEY));
-               },
-               // Prompt user for key and save it
-               openSelectKey: async () => {
-                   const key = prompt("Please enter your Google GenAI API Key:\n(It will be stored locally in your browser)");
-                   if (key && key.trim().length > 0) {
-                       localStorage.setItem(STORAGE_KEY, key.trim());
-                       window.process.env.API_KEY = key.trim();
-                       return true;
-                   }
-                   return false;
-               }
-            };
-        }
+        // If a build-time environment variable like VITE_API_KEY or REACT_APP_API_KEY
+        // is used (e.g., for local development without AI Studio), it would typically
+        // be injected here by the build tool or made available as process.env.API_KEY.
+        // For production deployments where `window.aistudio` is expected, process.env.API_KEY
+        // will be populated by the AI Studio platform after user selection.
       })();
     </script>
   <script type="importmap">
