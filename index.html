@@ -6,18 +6,45 @@
     <title>TradingGen AI Workflow</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      // Mock window.aistudio for environments where it's not injected by an external tool
-      // This ensures the code runs without crashing in standard browsers, 
-      // but the actual functionality relies on the prompt's specific environment or process.env.API_KEY
-      if (!window.aistudio) {
-          window.aistudio = {
-             // In a real deployed app without the specific Google injection wrapper, 
-             // we rely on process.env.API_KEY being set in build time or runtime env.
-             // This mock just prevents crash on the specific 'checkKey' logic if run in isolation.
-             hasSelectedApiKey: async () => true,
-             openSelectKey: async () => true
-          };
-      }
+      // =================================================================
+      // Vercel / Client-Side Deployment Shim
+      // =================================================================
+      // This script allows the user to input their API key securely in the browser
+      // without hardcoding it in the source code.
+      // =================================================================
+      (function() {
+        const STORAGE_KEY = 'gemini_api_key';
+
+        // 1. Polyfill process.env if it doesn't exist (common in Vite/Browser)
+        if (!window.process) window.process = { env: {} };
+        if (!window.process.env) window.process.env = {};
+
+        // 2. Load Key from LocalStorage if available
+        const storedKey = localStorage.getItem(STORAGE_KEY);
+        if (storedKey) {
+            window.process.env.API_KEY = storedKey;
+        }
+
+        // 3. Mock window.aistudio to handle Key Selection Flow
+        if (!window.aistudio) {
+            window.aistudio = {
+               // Check if we have a key in storage or env
+               hasSelectedApiKey: async () => {
+                   return !!(window.process.env.API_KEY || localStorage.getItem(STORAGE_KEY));
+               },
+               // Prompt user for key and save it
+               openSelectKey: async () => {
+                   const key = prompt("Please enter your Google GenAI API Key:\n(It will be stored locally in your browser)");
+                   if (key && key.trim().length > 0) {
+                       localStorage.setItem(STORAGE_KEY, key.trim());
+                       window.process.env.API_KEY = key.trim();
+                       return true;
+                   }
+                   return false;
+               }
+            };
+        }
+      })();
     </script>
   <script type="importmap">
 {
@@ -33,6 +60,5 @@
 </head>
   <body class="bg-slate-900">
     <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
   </body>
 </html>

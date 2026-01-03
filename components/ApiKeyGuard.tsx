@@ -23,9 +23,10 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
         const selected = await window.aistudio.hasSelectedApiKey();
         setHasKey(selected);
       } else {
-        // If process.env.API_KEY was present it would be handled here, but if not we show the guard
-        // In this case, if hardcoded key is not set, we assume false unless env exists
-        setHasKey(!!process.env.API_KEY); 
+        // Fallback for Vercel/Browser shim if checking localStorage directly via shim logic
+        // But since we updated index.html shim, window.aistudio should exist.
+        // If not, use process.env check
+        setHasKey(!!process.env.API_KEY || !!localStorage.getItem('gemini_api_key')); 
       }
     } catch (e) {
       console.error("Error checking API key", e);
@@ -41,7 +42,9 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
   const handleSelectKey = async () => {
     if (window.aistudio && window.aistudio.openSelectKey) {
       await window.aistudio.openSelectKey();
-      setHasKey(true);
+      // Re-check key after selection
+      const selected = await window.aistudio.hasSelectedApiKey();
+      setHasKey(selected);
     }
   };
 
@@ -62,19 +65,24 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
           
           <div className="bg-slate-900 p-4 rounded-lg text-left text-xs font-mono text-slate-400 mb-6 border border-slate-700">
             <p className="mb-2 text-yellow-500 font-bold">// Instruction:</p>
-            <p className="mb-2">Open <code>services/geminiService.ts</code></p>
-            <p>Paste your API Key into the <code>GEMINI_API_KEY</code> variable.</p>
+            <p className="mb-2">For security on the public web (Vercel), we do not store the key on the server.</p>
+            <p>Please click the button below to enter your API Key. It will be stored securely in your browser's local storage.</p>
           </div>
-
-          <div className="text-sm text-slate-500 mb-4">- OR -</div>
 
           <button
             onClick={handleSelectKey}
-            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold transition-all shadow-lg hover:shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold transition-all shadow-lg hover:shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             disabled={!window.aistudio?.openSelectKey}
           >
-            Select API Key (Temporary)
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-6-3a2 2 0 11-4 0 2 2 0 014 0zm-2 4a5 5 0 00-4.546 2.916A5.986 5.986 0 0010 16a5.986 5.986 0 004.546-2.084A5 5 0 0010 11z" clipRule="evenodd" />
+            </svg>
+            Enter API Key
           </button>
+          
+          <p className="mt-4 text-xs text-slate-500">
+             Don't have a key? <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Get one here</a>.
+          </p>
         </div>
       </div>
     );

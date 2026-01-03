@@ -11,10 +11,14 @@ export const GEMINI_API_KEY: string = "";
 
 // Helper to initialize AI client. 
 const getAiClient = () => {
-  // Prioritize Environment Variable (Vercel) -> Then Hardcoded (Local Dev)
-  const apiKey = process.env.API_KEY || (GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : "");
+  // Priority:
+  // 1. Environment Variable (Vercel Build Time)
+  // 2. LocalStorage (Shim for Browser/Vercel Runtime)
+  // 3. Hardcoded (Local Dev)
+  const apiKey = process.env.API_KEY || 
+                 localStorage.getItem('gemini_api_key') || 
+                 (GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : "");
   
-  // Note: The app handles missing keys via ApiKeyGuard, so we can initialize safely here.
   return new GoogleGenAI({ apiKey: apiKey || "" });
 };
 
