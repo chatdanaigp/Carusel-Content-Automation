@@ -12,7 +12,7 @@ export const GEMINI_API_KEY: string = "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA";
 // Note: We create a new instance per call to ensure latest API key is used if re-selected.
 const getAiClient = () => {
   // Use the hardcoded key if provided, otherwise fallback to empty string (which will cause error if not handled)
-  const apiKey = GEMINI_API_KEY !== "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA" ? GEMINI_API_KEY : (process.env.API_KEY || "");
+  const apiKey = GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : (process.env.API_KEY || "");
   return new GoogleGenAI({ apiKey: apiKey });
 };
 
@@ -171,149 +171,116 @@ export const generateInfographic = async (
     case 'CUSTOM':
         const userPrompt = customConfig?.prompt || "Clean professional style";
         finalPrompt = isTitleSlide ? `
-            Role: Expert Graphic Designer. 
-            Style Description: ${userPrompt}.
+            A high-quality educational infographic trading cover image.
+            Style: ${userPrompt}.
             
-            Task: Create a Cover Image for a trading carousel.
-            
-            Visual Elements to include:
-            - Headline Text: "${titleText}" (Make it the primary focus).
+            Visual Elements:
+            - Headline Text: "${titleText}" (Make it the primary focus, large and readable).
             - Hook/Subtext: "${contentText}".
             
             ${footerInstruction}
-            Aspect Ratio: ${aspectRatio}.
         ` : `
-            Role: Expert Graphic Designer.
-            Style Description: ${userPrompt}.
-            
-            Task: Create an Educational Trading Slide.
+            A high-quality educational trading infographic slide.
+            Style: ${userPrompt}.
             
             Layout Requirements:
-            1. Headline: "${titleText}" (Clear and readable).
-            2. Main Content Text: "${contentText}".
-            3. Central Visual/Chart Description: "${visualPrompt}".
+            1. Headline: "${titleText}" (Clear and readable at the top).
+            2. Main Content Text: "${contentText}" (Readable text body).
+            3. Central Visual: "${visualPrompt}".
             
             ${footerInstruction}
-            Aspect Ratio: ${aspectRatio}.
         `;
         break;
 
     case 'CYBERPUNK':
         finalPrompt = isTitleSlide ? `
-            Role: Expert Digital Artist. Style: CYBERPUNK / NEON TRADER.
-            Task: Cover Image. NO characters. TYPOGRAPHY & FX ONLY.
+            A Cyberpunk / Neon Trader style cover image. High-tech, futuristic.
+            Visuals: Dark city grid background, rain-slicked textures, deep purple/magenta/cyan lighting.
+            Typography: "Glitch" effect or Neon Sign font.
             
-            Visuals:
-            - Background: Dark city grid, rain-slicked textures, deep purple/magenta/cyan lighting.
-            - Text: "Glitch" effect or Neon Sign typography.
+            TEXT TO RENDER:
             - Headline: "${titleText}" (Neon Blue).
-            - Hook: "${contentText}" (Hot Pink or Bright Yellow).
+            - Subtext: "${contentText}" (Hot Pink or Bright Yellow).
             
             ${footerInstruction}
-            Aspect Ratio: ${aspectRatio}.
         ` : `
-            Role: Expert Digital Artist. Style: CYBERPUNK / NEON TRADER.
-            Task: Educational Slide.
-            
-            Layout:
-            1. Headline (Top): "${titleText}" - Neon style.
-            2. Text 1: "${contentText}" - HUD/Terminal font style.
-            3. Visual (Center): "${visualPrompt}" - Holographic, wireframe 3D chart, glowing edges.
-            4. Text 2: "${contentText}" - HUD style.
-            5. Footer:
-            ${footerInstruction}
-            
+            A Cyberpunk / Neon Trader style educational slide.
+            Visuals: Holographic wireframe 3D chart in center, glowing edges. HUD/Terminal interface elements.
             Palette: Black, Cyan, Magenta.
-            Aspect Ratio: ${aspectRatio}.
+            
+            TEXT TO RENDER:
+            - Headline (Top): "${titleText}" (Neon style).
+            - Body Text: "${contentText}" (HUD/Terminal font style).
+            - Footer: ${footerInstruction}
         `;
         break;
 
     case 'LUXURY':
         finalPrompt = isTitleSlide ? `
-            Role: Luxury Brand Designer. Style: HIGH-END PRESTIGE.
-            Task: Cover Image. TYPOGRAPHY ONLY.
+            A High-End Luxury Prestige style cover image. Expensive, elegant, premium.
+            Visuals: Black Marble, Silk texture, or Matte Black with Gold dust background.
+            Typography: Serif fonts (Vogue/Rolex style).
             
-            Visuals:
-            - Background: Black Marble, Silk texture, or Matte Black with Gold dust.
-            - Text: Serif fonts (Vogue/Rolex style). Elegant, expensive.
+            TEXT TO RENDER:
             - Headline: "${titleText}" (Metallic Gold).
-            - Hook: "${contentText}" (White Serif).
+            - Subtext: "${contentText}" (White Serif).
             
             ${footerInstruction}
-            Aspect Ratio: ${aspectRatio}.
         ` : `
-            Role: Luxury Brand Designer. Style: HIGH-END PRESTIGE.
-            Task: Educational Slide.
-            
-            Layout:
-            1. Headline (Top): "${titleText}" - Gold Serif.
-            2. Text 1: "${contentText}" - Elegant White.
-            3. Visual (Center): "${visualPrompt}" - Realistic, cinematic lighting, gold accents on charts.
-            4. Text 2: "${contentText}".
-            5. Footer:
-            ${footerInstruction}
-            
+            A High-End Luxury Prestige style educational slide.
+            Visuals: Realistic, cinematic lighting, gold accents on trading charts.
             Palette: Black, Gold, White.
-            Aspect Ratio: ${aspectRatio}.
+            
+            TEXT TO RENDER:
+            - Headline (Top): "${titleText}" (Gold Serif).
+            - Body Text: "${contentText}" (Elegant White).
+            - Footer: ${footerInstruction}
         `;
         break;
 
     case 'MINIMALIST':
         finalPrompt = isTitleSlide ? `
-            Role: Swiss Graphic Designer. Style: ULTRA MINIMALIST.
-            Task: Cover Image. TYPOGRAPHY ONLY.
+            An Ultra Minimalist Swiss Graphic Design cover image. Clean, high contrast.
+            Visuals: Off-white (#f8f9fa) or Very Light Grey background.
+            Typography: Massive Bold Black Helvetica/Sans-Serif.
             
-            Visuals:
-            - Background: Off-white (#f8f9fa) or Very Light Grey.
-            - Text: Massive Bold Black Helvetica/Sans-Serif. High contrast.
+            TEXT TO RENDER:
             - Headline: "${titleText}" (Black).
-            - Hook: "${contentText}" (Accent Color: International Orange or Royal Blue).
+            - Subtext: "${contentText}" (Accent Color: International Orange or Royal Blue).
             
-            ${footerInstruction} (Dark icons for visibility).
-            Aspect Ratio: ${aspectRatio}.
+            ${footerInstruction} (Dark icons).
         ` : `
-            Role: Swiss Graphic Designer. Style: ULTRA MINIMALIST.
-            Task: Educational Slide.
-            
-            Layout:
-            1. Headline (Top): "${titleText}" - Bold Black.
-            2. Text 1: "${contentText}" - Clean Dark Grey.
-            3. Visual (Center): "${visualPrompt}" - Flat vector, clean lines, isometric, no gradients.
-            4. Text 2: "${contentText}".
-            5. Footer:
-            ${footerInstruction}
-            
+            An Ultra Minimalist Swiss Graphic Design educational slide.
+            Visuals: Flat vector, clean lines, isometric chart, no gradients.
             Palette: White background, Black text, One accent color.
-            Aspect Ratio: ${aspectRatio}.
+            
+            TEXT TO RENDER:
+            - Headline (Top): "${titleText}" (Bold Black).
+            - Body Text: "${contentText}" (Clean Dark Grey).
+            - Footer: ${footerInstruction}
         `;
         break;
 
     case 'MODERN':
         // Slate/Electric Blue Fintech
         finalPrompt = isTitleSlide ? `
-          Role: Expert UI/UX Designer. Style: MODERN FINTECH.
-          Task: Cover Image. TYPOGRAPHY ONLY.
+          A Modern Fintech UI/UX style cover image. Clean, trustworthy, tech-forward.
+          Visuals: Deep Slate Grey (#1e293b) background. Glassmorphism effects.
+          Typography: Sans-Serif Bold.
           
-          Visuals:
-          - Background: Deep Slate Grey (#1e293b). Glassmorphism effects.
-          - Headline: "${titleText}" (White, Sans-Serif Bold).
-          - Hook: "${contentText}" (Electric Blue/Cyan).
+          TEXT TO RENDER:
+          - Headline: "${titleText}" (White).
+          - Subtext: "${contentText}" (Electric Blue/Cyan).
           
           ${footerInstruction}
-          Aspect Ratio: ${aspectRatio}.
         ` : `
-          Role: Expert UI/UX Designer. Style: MODERN FINTECH.
-          Task: Educational Slide.
+          A Modern Fintech UI/UX style educational slide.
+          Visuals: Abstract 3D, Gradient shapes, clean interface elements.
           
-          Layout:
-          1. Headline: "${titleText}" (White).
-          2. Text 1: "${contentText}".
-          3. Visual: "${visualPrompt}" - Abstract 3D, Gradient shapes, clean interface.
-          4. Text 2: "${contentText}".
-          5. Footer:
-          ${footerInstruction}
-          
-          Aspect Ratio: ${aspectRatio}.
+          TEXT TO RENDER:
+          - Headline: "${titleText}" (White).
+          - Body Text: "${contentText}".
+          - Footer: ${footerInstruction}
         `;
         break;
 
@@ -321,75 +288,51 @@ export const generateInfographic = async (
     default:
         // Classic Navy/Gold
         finalPrompt = isTitleSlide ? `
-            Role: Pro Trader Content Creator. Style: CLASSIC PRO.
-            Task: TEXT-ONLY Cover/Hook.
+            A Classic Pro Trader style cover image. Professional, financial news look.
+            Visuals: Dark Navy/Black Gradient background. Subtle chart patterns overlay.
             
-            Visuals:
-            - Background: Dark Navy/Black Gradient. Subtle chart patterns.
+            TEXT TO RENDER:
             - Headline: "${titleText}" (White).
-            - Hook: "${contentText}" (Gold #FFD700). Very Large.
+            - Subtext: "${contentText}" (Gold #FFD700, Very Large).
             
             ${footerInstruction}
-            Aspect Ratio: ${aspectRatio}.
         ` : `
-            Role: Pro Trader Content Creator. Style: CLASSIC PRO.
-            Task: Educational Slide.
+            A Classic Pro Trader style educational slide.
+            Visuals: Professional Trading Chart/Graph in center. Dark mode theme.
             
-            Layout:
-            1. Headline: "${titleText}" (Gold/White).
-            2. Text 1: "${contentText}".
-            3. Visual: "${visualPrompt}" - Professional Trading Chart/Graph. Dark mode.
-            4. Text 2: "${contentText}".
-            5. Footer:
-            ${footerInstruction}
-            
-            Aspect Ratio: ${aspectRatio}.
+            TEXT TO RENDER:
+            - Headline: "${titleText}" (Gold/White).
+            - Body Text: "${contentText}" (White/Grey).
+            - Footer: ${footerInstruction}
         `;
         break;
   }
 
-  // Construct parts for the API call
-  const parts: any[] = [
-      { text: finalPrompt }
-  ];
+  // NOTE: Imagen 3.0 via generateImages does not support "parts" or "inlineData" for reference images in the same way as Gemini.
+  // We will proceed with text-to-image generation using the updated prompt.
 
-  // If Custom style and reference image exists, add it to parts
-  if (style === 'CUSTOM' && customConfig?.referenceImage) {
-      const base64Data = customConfig.referenceImage.split(',')[1];
-      const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
+  try {
+      // Use Imagen 3 model which is generally available and deployable
+      const response = await ai.models.generateImages({
+        model: 'imagen-3.0-generate-001', 
+        prompt: finalPrompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: 'image/jpeg',
+          aspectRatio: aspectRatio as any, // Cast to any because TS enum definition might differ slightly but string values "1:1", "3:4", "9:16" are valid for Imagen
+        }
+      });
+
+      const base64Data = response.generatedImages?.[0]?.image?.imageBytes;
       
-      // Add image part. Note: For style transfer/reference, providing the image alongside the text prompt works well.
-      if (base64Data && mimeType) {
-          parts.push({
-              inlineData: {
-                  data: base64Data,
-                  mimeType: mimeType
-              }
-          });
+      if (!base64Data) {
+        throw new Error("No image data returned from Imagen.");
       }
+
+      return `data:image/jpeg;base64,${base64Data}`;
+
+  } catch (error) {
+      console.error("Imagen generation failed:", error);
+      throw error;
   }
-
-  // Switch to Gemini 2.5 Flash Image (Nano Banana series)
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: {
-      parts: parts,
-    },
-    config: {
-      imageConfig: {
-        aspectRatio: aspectRatio as any, // 1:1, 3:4, 9:16 are supported
-      }
-    }
-  });
-
-  // Extract image from response parts
-  if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
-          if (part.inlineData) {
-              return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-          }
-      }
-  }
-
-  throw new Error("No image data found in Gemini Flash Image response");
 };
