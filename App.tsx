@@ -181,7 +181,7 @@ const App: React.FC = () => {
                 // Success! Wait a bit before next slide to be nice to rate limiter (pacing)
                 // Skip delay on the very last slide
                 if (i < slideData.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 4000));
+                    await new Promise(resolve => setTimeout(resolve, 10000)); // Increased from 4000 to 10000 for Free Tier safety
                 }
 
             } catch (e: any) {
@@ -191,8 +191,8 @@ const App: React.FC = () => {
                 
                 if (is429 || is503) {
                     attempts++;
-                    // Exponential backoff: 5s, 10s, 15s...
-                    const waitTime = 5000 * attempts;
+                    // Exponential backoff: 10s, 20s, 30s... (Increased from 5s)
+                    const waitTime = 10000 * attempts;
                     const errorType = is429 ? "Rate limit" : "Service unavailable";
                     console.warn(`${errorType} for slide ${slide.id}. Waiting ${waitTime/1000}s before retry ${attempts}/${maxAttempts}...`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -223,7 +223,7 @@ const App: React.FC = () => {
                          success = true;
                          // Wait after success
                          if (i < slideData.length - 1) {
-                            await new Promise(resolve => setTimeout(resolve, 4000));
+                            await new Promise(resolve => setTimeout(resolve, 10000));
                          }
                      } catch (retryError: any) {
                          if (isPermissionError(retryError)) {

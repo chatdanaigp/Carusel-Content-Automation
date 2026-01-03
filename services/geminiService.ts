@@ -258,7 +258,7 @@ export const generateInfographic = async (
   }
 
   // 5. Execution with Fallback Logic
-  const generate = async (modelName: string, promptParts: any[]) => {
+  const generate = async (modelName: string, promptParts: any[], allowRateLimitFallback: boolean = false) => {
       try {
         console.log(`Attempting image generation with model: ${modelName}`);
         
@@ -293,7 +293,13 @@ export const generateInfographic = async (
         return null;
       } catch (e: any) {
           // IMPORTANT: Propagate Rate Limits so App.tsx can handle backoff
+          // If allowRateLimitFallback is true, we return null to let the next model attempt run
+          // If false, we throw so App.tsx can pause and retry
           if (e.message?.includes('429') || e.message?.includes('RESOURCE_EXHAUSTED')) {
+              if (allowRateLimitFallback) {
+                  console.warn(`Model ${modelName} hit rate limit (429). Attempting fallback...`);
+                  return null;
+              }
               throw e;
           }
           console.warn(`Error with model ${modelName}:`, e);
@@ -302,16 +308,18 @@ export const generateInfographic = async (
   };
 
   // Attempt 1: Primary Model (2.5) - Full Prompt
-  let image = await generate(IMAGE_MODEL_PRIMARY, fullParts);
+  // Allow fallback on 429
+  let image = await generate(IMAGE_MODEL_PRIMARY, fullParts, true);
 
   // Attempt 2: Fallback Model (2.0) - Full Prompt
+  // Allow fallback on 429
   if (!image) {
       console.log("Attempt 1 failed. Switching to fallback model...");
-      image = await generate(IMAGE_MODEL_FALLBACK, fullParts);
+      image = await generate(IMAGE_MODEL_FALLBACK, fullParts, true);
   }
 
   // Attempt 3: Primary Model (2.5) - Simplified Prompt (No Body Text, But keep Visual Footer)
-  // If previous attempts failed (likely due to safety filters on text rendering), try just the visual art + footer logos.
+  // If we reach here and hit 429, we MUST throw to trigger the backoff delay in App.tsx
   if (!image) {
       console.log("Attempt 2 failed. Switching to SIMPLIFIED prompt (Text-Free Body)...");
       
@@ -343,7 +351,7 @@ export const generateInfographic = async (
            }
       }
 
-      image = await generate(IMAGE_MODEL_PRIMARY, simpleParts);
+      image = await generate(IMAGE_MODEL_PRIMARY, simpleParts, false);
   }
 
   if (!image) {
