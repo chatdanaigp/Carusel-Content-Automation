@@ -12,7 +12,7 @@ export const GEMINI_API_KEY: string = "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA";
 // Note: We create a new instance per call to ensure latest API key is used if re-selected.
 const getAiClient = () => {
   // Use the hardcoded key if provided, otherwise fallback to empty string (which will cause error if not handled)
-  const apiKey = GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : (process.env.API_KEY || "");
+  const apiKey = GEMINI_API_KEY !== "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA" ? GEMINI_API_KEY : (process.env.API_KEY || "");
   return new GoogleGenAI({ apiKey: apiKey });
 };
 
