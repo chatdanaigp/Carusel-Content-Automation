@@ -1,20 +1,48 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# TradingFlow GenAI
 
-# Run and deploy your AI Studio app
+An automated workflow application that helps traders generate educational social media content and infographics using Google's Gemini AI models.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/drive/1XkTDXf-7TQoia-982KOk6Kii3kTyXrcH
+- **Topic to Ideas**: Enter a keyword (e.g., "Mindset") to generate engaging content angles.
+- **Content Expansion**: Automatically generates titles, educational content, and visual prompts for carousel slides.
+- **AI Image Generation**: Creates professional-grade infographics using **Gemini 2.5 Flash Image** (Free tier compatible).
+- **Multi-Style Support**: Choose from Original, Modern, Cyberpunk, Luxury, or Minimalist designs.
+- **Social Media Integration**: Configure footers for TikTok, YouTube, Instagram, etc.
+- **Bilingual Support**: Generates content in Thai (TH) or English (EN).
 
-## Run Locally
+## Tech Stack
 
-**Prerequisites:**  Node.js
+- **Frontend**: React, TypeScript, Tailwind CSS
+- **AI Integration**: Google GenAI SDK (`@google/genai`)
+- **Models Used**:
+  - `gemini-3-flash-preview` (Text Generation)
+  - `gemini-2.5-flash-image` (Image Generation)
 
+## Setup & Installation
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. Clone the repository.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Set up your API Key:
+   - Create a `.env` file in the root.
+   - Add `API_KEY=your_google_genai_api_key`.
+
+4. Run the development server:
+   ```bash
+   npm start
+   ```
+
+## Usage
+
+1. **Enter a Topic**: Type a trading keyword.
+2. **Select an Idea**: Choose from the generated content angles.
+3. **Customize**: Set the design style and aspect ratio.
+4. **Generate**: The app will generate text slides and corresponding images sequentially.
+5. **Download**: Save the generated infographics.
+
+## License
+
+MIT

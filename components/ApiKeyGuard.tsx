@@ -9,9 +9,20 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   const checkKey = async () => {
-    // API Key is now hardcoded in the service, so we bypass the check.
-    setHasKey(true);
-    setLoading(false);
+    try {
+      if (window.aistudio && window.aistudio.hasSelectedApiKey) {
+        const selected = await window.aistudio.hasSelectedApiKey();
+        setHasKey(selected);
+      } else {
+        // Fallback for environments without the specific window object
+        // If process.env.API_KEY is available (injected via build), we are good.
+        setHasKey(true); 
+      }
+    } catch (e) {
+      console.error("Error checking API key", e);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -21,7 +32,7 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
   const handleSelectKey = async () => {
     if (window.aistudio && window.aistudio.openSelectKey) {
       await window.aistudio.openSelectKey();
-      // Even if they select one, we use the hardcoded one, but we allow the flow to resolve.
+      // Assume success after dialog closes/promise resolves
       setHasKey(true);
     }
   };
@@ -38,13 +49,13 @@ const ApiKeyGuard: React.FC<ApiKeyGuardProps> = ({ children }) => {
             Authentication Required
           </h2>
           <p className="mb-6 text-slate-300">
-            Please authenticate to continue.
+            Please select an API Key to continue.
           </p>
           <button
             onClick={handleSelectKey}
             className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold transition-all shadow-lg hover:shadow-blue-500/20"
           >
-            Authenticate
+            Select API Key
           </button>
         </div>
       </div>

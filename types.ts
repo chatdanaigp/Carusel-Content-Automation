@@ -18,8 +18,13 @@ export interface GeneratedImage {
   status: 'pending' | 'loading' | 'success' | 'error';
 }
 
-export type DesignStyle = 'ORIGINAL' | 'MODERN' | 'CYBERPUNK' | 'LUXURY' | 'MINIMALIST';
+export type DesignStyle = 'ORIGINAL' | 'MODERN' | 'CYBERPUNK' | 'LUXURY' | 'MINIMALIST' | 'CUSTOM';
 export type UiDesignStyle = DesignStyle | 'RANDOM';
+
+export interface CustomStyleConfig {
+  prompt: string;
+  referenceImage: string | null; // Base64 data URI
+}
 
 export type DownloadMode = 'AUTO' | 'MANUAL';
 

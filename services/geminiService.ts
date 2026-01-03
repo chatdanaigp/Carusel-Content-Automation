@@ -1,11 +1,11 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { SlideContent, ContentIdea, DesignStyle, SocialConfig } from "../types";
+import { SlideContent, ContentIdea, DesignStyle, SocialConfig, CustomStyleConfig } from "../types";
 
 // Helper to initialize AI client. 
 // Note: We create a new instance per call to ensure latest API key is used if re-selected.
 const getAiClient = () => {
-  // User explicitly requested to use this specific API Key
-  return new GoogleGenAI({ apiKey: "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA" });
+  // Restore usage of process.env.API_KEY as requested for standard/free tier usage
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 export const generateContentIdeas = async (keyword: string, language: 'TH' | 'EN'): Promise<ContentIdea[]> => {
@@ -118,7 +118,8 @@ export const generateInfographic = async (
   aspectRatio: string = "1:1",
   isTitleSlide: boolean = false,
   style: DesignStyle = 'ORIGINAL',
-  socialConfig?: SocialConfig
+  socialConfig?: SocialConfig,
+  customConfig?: CustomStyleConfig
 ): Promise<string> => {
   const ai = getAiClient();
 
@@ -158,6 +159,36 @@ export const generateInfographic = async (
   }
 
   switch (style) {
+    case 'CUSTOM':
+        const userPrompt = customConfig?.prompt || "Clean professional style";
+        finalPrompt = isTitleSlide ? `
+            Role: Expert Graphic Designer. 
+            Style Description: ${userPrompt}.
+            
+            Task: Create a Cover Image for a trading carousel.
+            
+            Visual Elements to include:
+            - Headline Text: "${titleText}" (Make it the primary focus).
+            - Hook/Subtext: "${contentText}".
+            
+            ${footerInstruction}
+            Aspect Ratio: ${aspectRatio}.
+        ` : `
+            Role: Expert Graphic Designer.
+            Style Description: ${userPrompt}.
+            
+            Task: Create an Educational Trading Slide.
+            
+            Layout Requirements:
+            1. Headline: "${titleText}" (Clear and readable).
+            2. Main Content Text: "${contentText}".
+            3. Central Visual/Chart Description: "${visualPrompt}".
+            
+            ${footerInstruction}
+            Aspect Ratio: ${aspectRatio}.
+        `;
+        break;
+
     case 'CYBERPUNK':
         finalPrompt = isTitleSlide ? `
             Role: Expert Digital Artist. Style: CYBERPUNK / NEON TRADER.
@@ -303,21 +334,48 @@ export const generateInfographic = async (
         break;
   }
 
-  // Switch to Imagen 3/4 (Image Gen 4 Ultra maps to imagen-4.0-generate-001)
-  const response = await ai.models.generateImages({
-    model: 'imagen-4.0-generate-001',
-    prompt: finalPrompt,
+  // Construct parts for the API call
+  const parts: any[] = [
+      { text: finalPrompt }
+  ];
+
+  // If Custom style and reference image exists, add it to parts
+  if (style === 'CUSTOM' && customConfig?.referenceImage) {
+      const base64Data = customConfig.referenceImage.split(',')[1];
+      const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
+      
+      // Add image part. Note: For style transfer/reference, providing the image alongside the text prompt works well.
+      if (base64Data && mimeType) {
+          parts.push({
+              inlineData: {
+                  data: base64Data,
+                  mimeType: mimeType
+              }
+          });
+      }
+  }
+
+  // Switch to Gemini 2.5 Flash Image (Nano Banana series)
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-image',
+    contents: {
+      parts: parts,
+    },
     config: {
-      numberOfImages: 1,
-      aspectRatio: aspectRatio,
-      outputMimeType: 'image/png',
+      imageConfig: {
+        aspectRatio: aspectRatio as any, // 1:1, 3:4, 9:16 are supported
+      }
     }
   });
 
-  const base64Data = response.generatedImages?.[0]?.image?.imageBytes;
-  if (base64Data) {
-    return `data:image/png;base64,${base64Data}`;
+  // Extract image from response parts
+  if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData) {
+              return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          }
+      }
   }
 
-  throw new Error("No image data found in response");
+  throw new Error("No image data found in Gemini Flash Image response");
 };

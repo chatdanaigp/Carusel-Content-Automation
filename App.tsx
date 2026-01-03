@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { generateContentIdeas, generateTradingSlides, generateInfographic } from './services/geminiService';
-import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea, UiDesignStyle, DesignStyle, DownloadMode, SocialConfig } from './types';
+import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea, UiDesignStyle, DesignStyle, DownloadMode, SocialConfig, CustomStyleConfig } from './types';
 import ApiKeyGuard from './components/ApiKeyGuard';
 import SlideCard from './components/SlideCard';
 import ImageResult from './components/ImageResult';
@@ -15,6 +15,13 @@ const App: React.FC = () => {
   // Configuration States
   const [uiDesignStyle, setUiDesignStyle] = useState<UiDesignStyle>('ORIGINAL');
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('AUTO');
+  
+  // Custom Style State
+  const [customStyleConfig, setCustomStyleConfig] = useState<CustomStyleConfig>({
+    prompt: '',
+    referenceImage: null
+  });
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Social Media Configuration State
   const [socialConfig, setSocialConfig] = useState<SocialConfig>({
@@ -42,6 +49,26 @@ const App: React.FC = () => {
   const [images, setImages] = useState<GeneratedImage[]>([]);
   
   const [error, setError] = useState<string | null>(null);
+
+  // Helper for image upload
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            setCustomStyleConfig(prev => ({
+                ...prev,
+                referenceImage: reader.result as string
+            }));
+        };
+        reader.readAsDataURL(file);
+    }
+  };
+
+  const clearReferenceImage = () => {
+      setCustomStyleConfig(prev => ({ ...prev, referenceImage: null }));
+      if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   // STEP 1: Generate Ideas
   const handleGenerateIdeas = async () => {
@@ -142,7 +169,8 @@ const App: React.FC = () => {
                     aspectRatio,
                     isTitleSlide,
                     style,
-                    socialConfig
+                    socialConfig,
+                    customStyleConfig // Pass custom config
                 );
                 
                 setImages(prev => prev.map(img => 
@@ -181,7 +209,8 @@ const App: React.FC = () => {
                             aspectRatio,
                             isTitleSlide,
                             style,
-                            socialConfig
+                            socialConfig,
+                            customStyleConfig
                          );
                          setImages(prev => prev.map(img => 
                             img.slideId === slide.id ? { ...img, status: 'success', imageUrl: base64ImageRetry } : img
@@ -200,8 +229,6 @@ const App: React.FC = () => {
                             setStatus(WorkflowStatus.IDLE); 
                             return; // Stop the entire process
                          }
-                         // If permission retry failed for another reason (e.g. 429), it might be caught by outer logic or next loop if structured differently, 
-                         // but here we just log and fail this specific slide to avoid infinite loops in complex error states.
                          console.error(`Retry after permission grant failed for slide ${slide.id}`, retryError);
                      }
                 }
@@ -350,7 +377,7 @@ const App: React.FC = () => {
                     {/* Middle Row: Design Style */}
                     <div className="flex flex-col items-center gap-2 w-full">
                         <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Visual Style</label>
-                        <div className="grid grid-cols-3 gap-4 w-full max-w-lg">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-2xl">
                              <button
                                 onClick={() => setUiDesignStyle('ORIGINAL')}
                                 disabled={isGenerating}
@@ -362,7 +389,7 @@ const App: React.FC = () => {
                                 `}
                             >
                                 <span className={`font-bold text-sm ${uiDesignStyle === 'ORIGINAL' ? 'text-yellow-400' : 'text-slate-300'}`}>Original</span>
-                                <span className="text-[9px] opacity-70 mt-1">Dark Navy & Gold</span>
+                                <span className="text-[9px] opacity-70 mt-1">Navy & Gold</span>
                             </button>
 
                             <button
@@ -376,7 +403,21 @@ const App: React.FC = () => {
                                 `}
                             >
                                 <span className={`font-bold text-sm ${uiDesignStyle === 'MODERN' ? 'text-cyan-300' : 'text-slate-300'}`}>Modern</span>
-                                <span className="text-[9px] opacity-70 mt-1">Slate & Neon Blue</span>
+                                <span className="text-[9px] opacity-70 mt-1">Slate & Neon</span>
+                            </button>
+
+                            <button
+                                onClick={() => setUiDesignStyle('CUSTOM')}
+                                disabled={isGenerating}
+                                className={`
+                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                    ${uiDesignStyle === 'CUSTOM' 
+                                        ? 'bg-slate-700 border-pink-500 shadow-[0_0_15px_rgba(236,72,153,0.2)]' 
+                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
+                                `}
+                            >
+                                <span className={`font-bold text-sm ${uiDesignStyle === 'CUSTOM' ? 'text-pink-400' : 'text-slate-300'}`}>Custom</span>
+                                <span className="text-[9px] opacity-70 mt-1">Your Prompt + Ref</span>
                             </button>
 
                             <button
@@ -393,6 +434,68 @@ const App: React.FC = () => {
                                 <span className="text-[9px] opacity-70 mt-1">Random Variety</span>
                             </button>
                         </div>
+                        
+                        {/* CUSTOM STYLE INPUTS */}
+                        {uiDesignStyle === 'CUSTOM' && (
+                            <div className="w-full max-w-2xl mt-4 bg-slate-900/50 rounded-xl p-4 border border-pink-500/30 animate-fade-in text-left">
+                                <h4 className="text-sm font-bold text-pink-400 mb-3 flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>
+                                    Custom Style Configuration
+                                </h4>
+                                
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Style Prompt (Describe the look, colors, vibe)</label>
+                                        <textarea
+                                            value={customStyleConfig.prompt}
+                                            onChange={(e) => setCustomStyleConfig(prev => ({ ...prev, prompt: e.target.value }))}
+                                            placeholder="E.g. Vintage newspaper aesthetic, beige background, typewriter font, highly detailed illustrations..."
+                                            className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-pink-500 min-h-[80px]"
+                                            disabled={isGenerating}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Reference Image (Optional - Styles the output based on this)</label>
+                                        <div className="flex items-center gap-4">
+                                            <input 
+                                                type="file" 
+                                                accept="image/*"
+                                                ref={fileInputRef}
+                                                onChange={handleImageUpload}
+                                                className="hidden"
+                                                id="ref-image-upload"
+                                                disabled={isGenerating}
+                                            />
+                                            <label 
+                                                htmlFor="ref-image-upload"
+                                                className="cursor-pointer bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-pink-500/50 text-slate-300 text-xs px-4 py-2 rounded-lg transition-all flex items-center gap-2"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                                {customStyleConfig.referenceImage ? 'Change Image' : 'Upload Image'}
+                                            </label>
+
+                                            {customStyleConfig.referenceImage && (
+                                                <div className="relative group">
+                                                    <img 
+                                                        src={customStyleConfig.referenceImage} 
+                                                        alt="Reference" 
+                                                        className="h-10 w-10 object-cover rounded border border-slate-600"
+                                                    />
+                                                    <button 
+                                                        onClick={clearReferenceImage}
+                                                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 shadow hover:bg-red-600"
+                                                        title="Remove"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div className="w-full h-px bg-slate-700/50"></div>
