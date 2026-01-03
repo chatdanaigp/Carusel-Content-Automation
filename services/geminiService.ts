@@ -9,12 +9,18 @@ export const GEMINI_API_KEY: string = "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA";
 // =============================================================================================
 
 // Helper to initialize AI client. 
-// Note: We create a new instance per call to ensure latest API key is used if re-selected.
 const getAiClient = () => {
-  // Use the hardcoded key if provided, otherwise fallback to empty string (which will cause error if not handled)
   const apiKey = GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : (process.env.API_KEY || "");
   return new GoogleGenAI({ apiKey: apiKey });
 };
+
+// 🔥 MODEL CONFIGURATION
+// Text: Using Gemini 3 Flash Preview as requested ("3.0")
+const TEXT_MODEL = 'gemini-3-flash-preview'; 
+
+// Image: Primary is 2.5 Flash Image ("2.5"), Fallback is 2.0 Flash Exp for stability
+const IMAGE_MODEL_PRIMARY = 'gemini-2.5-flash-image';
+const IMAGE_MODEL_FALLBACK = 'gemini-2.0-flash-exp';
 
 export const generateContentIdeas = async (keyword: string, language: 'TH' | 'EN'): Promise<ContentIdea[]> => {
   const ai = getAiClient();
@@ -31,7 +37,7 @@ export const generateContentIdeas = async (keyword: string, language: 'TH' | 'EN
   `;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: TEXT_MODEL,
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -67,7 +73,6 @@ export const generateTradingSlides = async (selectedIdea: ContentIdea, language:
   
   const langInstruction = language === 'TH' ? '(in Thai)' : '(in English)';
 
-  // Modified prompt to use the specific selected idea
   const prompt = `
     Create a comprehensive set of educational slides based on this specific content idea:
     Title: "${selectedIdea.title}"
@@ -85,7 +90,7 @@ export const generateTradingSlides = async (selectedIdea: ContentIdea, language:
   `;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: TEXT_MODEL,
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -110,7 +115,6 @@ export const generateTradingSlides = async (selectedIdea: ContentIdea, language:
 
   const rawData = JSON.parse(response.text);
   
-  // Map to our internal type and add IDs
   return rawData.map((item: any, index: number) => ({
     id: index + 1,
     title: item.title,
@@ -131,208 +135,212 @@ export const generateInfographic = async (
 ): Promise<string> => {
   const ai = getAiClient();
 
-  let finalPrompt = "";
-  let footerInstruction = "";
+  // 2. Style Logic (Moved up to be used in Footer Logic)
+  let styleInstruction = "";
+  let iconStyle = "white or gold";
+  switch (style) {
+    case 'CYBERPUNK':
+        styleInstruction = "Style: Cyberpunk. Dark background, Neon Cyan & Magenta lights, Glitch effects, Futuristic HUD elements.";
+        iconStyle = "Neon Glowing (Cyan/Magenta)";
+        break;
+    case 'LUXURY':
+        styleInstruction = "Style: Luxury. Black marble or dark texture background, Metallic Gold typography, Elegant serif fonts, Premium feel.";
+        iconStyle = "Metallic Gold";
+        break;
+    case 'MINIMALIST':
+        styleInstruction = "Style: Swiss Minimalist. Solid Off-White background, Bold Black Typography, High contrast, Simple geometric shapes.";
+        iconStyle = "Solid Black";
+        break;
+    case 'MODERN':
+        styleInstruction = "Style: Modern Fintech. Slate Grey to Blue gradient background, Glassmorphism effects, Clean Sans-serif fonts, Tech feel.";
+        iconStyle = "White Glassmorphism";
+        break;
+    case 'CUSTOM':
+        styleInstruction = `Style: Custom. ${customConfig?.prompt || "Professional Design"}.`;
+        iconStyle = "Matching the artwork style";
+        break;
+    case 'ORIGINAL':
+    default:
+        styleInstruction = "Style: Professional Trader. Navy Blue gradient background, Gold accents, Candlestick chart patterns in background.";
+        iconStyle = "Metallic Gold or White";
+        break;
+  }
 
-  // Dynamic Footer Construction based on Config
+  // 1. Footer Logic with STRICT Pairing
+  let footerInstruction = "";
   if (socialConfig) {
       const activePlatforms = socialConfig.platforms.filter(p => p.selected);
-      
       if (activePlatforms.length > 0) {
-          const footerItems = activePlatforms.map(p => {
+          // Force construct distinct pairs: [Icon] [Name]
+          const footerPairs = activePlatforms.map(p => {
               const handle = socialConfig.useSameHandle ? socialConfig.masterHandle : p.handle;
-              // We instruct the model to use the Icon, then the handle text
-              return `[${p.iconName}] ${handle}`;
-          }).join("     ");
+              return `[${p.iconName} Icon] "${handle}"`;
+          }).join("      "); // Large space in string to hint separation
 
           footerInstruction = `
-            FOOTER SECTION (Bottom of image):
-            - Layout: A clean, horizontal row at the very bottom.
-            - Content to Display: ${footerItems}
-            - STRICT RULE: DISPLAY ONLY ICONS AND HANDLES.
-            - FORBIDDEN: DO NOT WRITE THE TEXT "${activePlatforms.map(p => p.name).join('" OR "')}". 
-            - Example: Show [TikTok Icon] @handle. Do NOT show "TikTok @handle".
-            - Visual Style: Minimalist, professional icons. Text should be small but readable.
+          FOOTER INSTRUCTION (Strict Layout):
+          - Position: Bottom edge of the image.
+          - Layout: Horizontal row.
+          - CONTENT: ${footerPairs}
+          - CRITICAL RULE: Render EXACTLY as pairs. One Icon + One Name. Do NOT group icons.
+          - VISUAL STYLE: Icons must be ${iconStyle}. Font must be small, clean, sans-serif.
+          - Example Look: [TikTok Logo] @user      [IG Logo] @user
           `;
-      } else {
-          footerInstruction = "FOOTER: Do not display any social media footer.";
       }
-  } else {
-      // Fallback if no config provided (Legacy behavior)
-      footerInstruction = `
-        FOOTER:
-        - Minimalist row of icons: [Tiktok Logo] [YouTube Logo] [Instagram Logo]
-        - Followed by handles: crt.trader / crt.trader / crt.trader.official
-        - IMPORTANT: Use LOGOS, do not write platform names text.
+  }
+
+  // 3. SPECIAL LOGIC FOR TITLE SLIDE (Preset Modes Only)
+  // If it's the first slide AND not custom mode, force a Typography/Poster layout
+  let finalVisualPrompt = visualPrompt;
+  let finalDesignDirectives = `
+    - ${styleInstruction}
+    - The text must be clearly visible and integrated into the design.
+    - High resolution, sharp details.
+    - Composition: Balanced, suitable for an educational slide.
+  `;
+
+  if (isTitleSlide && style !== 'CUSTOM') {
+      finalVisualPrompt = `
+        A high-impact TITLE SLIDE / COVER IMAGE.
+        Focus: Big, Bold, Catchy Typography for the Headline.
+        Background: Abstract and textural based on the ${style} style, designed to make the text pop.
+        Do NOT include distracting characters, complex scenes, or illustrations.
+        Vibe: "Must Click", "Secret Revealed", "Important Lesson".
+      `;
+      
+      finalDesignDirectives = `
+        - EMPHASIZE TYPOGRAPHY: The Headline must be the main visual element. Huge font size.
+        - LAYOUT: Poster style. Center or top-heavy alignment.
+        - BACKGROUND: Clean, premium, abstract texture that supports text readability.
+        - ${styleInstruction}
       `;
   }
 
-  switch (style) {
-    case 'CUSTOM':
-        const userPrompt = customConfig?.prompt || "Clean professional style";
-        finalPrompt = isTitleSlide ? `
-            A high-quality educational infographic trading cover image.
-            Style: ${userPrompt}.
-            
-            Visual Elements:
-            - Headline Text: "${titleText}" (Make it the primary focus, large and readable).
-            - Hook/Subtext: "${contentText}".
-            
-            ${footerInstruction}
-        ` : `
-            A high-quality educational trading infographic slide.
-            Style: ${userPrompt}.
-            
-            Layout Requirements:
-            1. Headline: "${titleText}" (Clear and readable at the top).
-            2. Main Content Text: "${contentText}" (Readable text body).
-            3. Central Visual: "${visualPrompt}".
-            
-            ${footerInstruction}
-        `;
-        break;
+  // 4. Image Generation Prompt (Full Detail)
+  const fullPrompt = `
+    Generate a high-quality, photorealistic infographic image for social media.
+    
+    TEXT CONTENT TO RENDER (Must be spelled correctly and legible):
+    - HEADLINE (Large & Dominant): "${titleText}"
+    - BODY (Readable): "${contentText}"
+    
+    ${footerInstruction}
+    
+    VISUAL CONTEXT:
+    ${finalVisualPrompt}
+    
+    DESIGN DIRECTIVES:
+    ${finalDesignDirectives}
+  `;
 
-    case 'CYBERPUNK':
-        finalPrompt = isTitleSlide ? `
-            A Cyberpunk / Neon Trader style cover image. High-tech, futuristic.
-            Visuals: Dark city grid background, rain-slicked textures, deep purple/magenta/cyan lighting.
-            Typography: "Glitch" effect or Neon Sign font.
-            
-            TEXT TO RENDER:
-            - Headline: "${titleText}" (Neon Blue).
-            - Subtext: "${contentText}" (Hot Pink or Bright Yellow).
-            
-            ${footerInstruction}
-        ` : `
-            A Cyberpunk / Neon Trader style educational slide.
-            Visuals: Holographic wireframe 3D chart in center, glowing edges. HUD/Terminal interface elements.
-            Palette: Black, Cyan, Magenta.
-            
-            TEXT TO RENDER:
-            - Headline (Top): "${titleText}" (Neon style).
-            - Body Text: "${contentText}" (HUD/Terminal font style).
-            - Footer: ${footerInstruction}
-        `;
-        break;
-
-    case 'LUXURY':
-        finalPrompt = isTitleSlide ? `
-            A High-End Luxury Prestige style cover image. Expensive, elegant, premium.
-            Visuals: Black Marble, Silk texture, or Matte Black with Gold dust background.
-            Typography: Serif fonts (Vogue/Rolex style).
-            
-            TEXT TO RENDER:
-            - Headline: "${titleText}" (Metallic Gold).
-            - Subtext: "${contentText}" (White Serif).
-            
-            ${footerInstruction}
-        ` : `
-            A High-End Luxury Prestige style educational slide.
-            Visuals: Realistic, cinematic lighting, gold accents on trading charts.
-            Palette: Black, Gold, White.
-            
-            TEXT TO RENDER:
-            - Headline (Top): "${titleText}" (Gold Serif).
-            - Body Text: "${contentText}" (Elegant White).
-            - Footer: ${footerInstruction}
-        `;
-        break;
-
-    case 'MINIMALIST':
-        finalPrompt = isTitleSlide ? `
-            An Ultra Minimalist Swiss Graphic Design cover image. Clean, high contrast.
-            Visuals: Off-white (#f8f9fa) or Very Light Grey background.
-            Typography: Massive Bold Black Helvetica/Sans-Serif.
-            
-            TEXT TO RENDER:
-            - Headline: "${titleText}" (Black).
-            - Subtext: "${contentText}" (Accent Color: International Orange or Royal Blue).
-            
-            ${footerInstruction} (Dark icons).
-        ` : `
-            An Ultra Minimalist Swiss Graphic Design educational slide.
-            Visuals: Flat vector, clean lines, isometric chart, no gradients.
-            Palette: White background, Black text, One accent color.
-            
-            TEXT TO RENDER:
-            - Headline (Top): "${titleText}" (Bold Black).
-            - Body Text: "${contentText}" (Clean Dark Grey).
-            - Footer: ${footerInstruction}
-        `;
-        break;
-
-    case 'MODERN':
-        // Slate/Electric Blue Fintech
-        finalPrompt = isTitleSlide ? `
-          A Modern Fintech UI/UX style cover image. Clean, trustworthy, tech-forward.
-          Visuals: Deep Slate Grey (#1e293b) background. Glassmorphism effects.
-          Typography: Sans-Serif Bold.
-          
-          TEXT TO RENDER:
-          - Headline: "${titleText}" (White).
-          - Subtext: "${contentText}" (Electric Blue/Cyan).
-          
-          ${footerInstruction}
-        ` : `
-          A Modern Fintech UI/UX style educational slide.
-          Visuals: Abstract 3D, Gradient shapes, clean interface elements.
-          
-          TEXT TO RENDER:
-          - Headline: "${titleText}" (White).
-          - Body Text: "${contentText}".
-          - Footer: ${footerInstruction}
-        `;
-        break;
-
-    case 'ORIGINAL':
-    default:
-        // Classic Navy/Gold
-        finalPrompt = isTitleSlide ? `
-            A Classic Pro Trader style cover image. Professional, financial news look.
-            Visuals: Dark Navy/Black Gradient background. Subtle chart patterns overlay.
-            
-            TEXT TO RENDER:
-            - Headline: "${titleText}" (White).
-            - Subtext: "${contentText}" (Gold #FFD700, Very Large).
-            
-            ${footerInstruction}
-        ` : `
-            A Classic Pro Trader style educational slide.
-            Visuals: Professional Trading Chart/Graph in center. Dark mode theme.
-            
-            TEXT TO RENDER:
-            - Headline: "${titleText}" (Gold/White).
-            - Body Text: "${contentText}" (White/Grey).
-            - Footer: ${footerInstruction}
-        `;
-        break;
+  // Construct parts for Full Prompt
+  const fullParts: any[] = [{ text: fullPrompt }];
+  if (style === 'CUSTOM' && customConfig?.referenceImage) {
+      const base64Data = customConfig.referenceImage.split(',')[1];
+      const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
+      if (base64Data && mimeType) {
+           fullParts.push({
+              inlineData: {
+                  data: base64Data,
+                  mimeType: mimeType
+              }
+           });
+           fullParts[0].text += " \n(Use the attached image as a style reference).";
+      }
   }
 
-  // NOTE: Imagen 3.0 via generateImages does not support "parts" or "inlineData" for reference images in the same way as Gemini.
-  // We will proceed with text-to-image generation using the updated prompt.
-
-  try {
-      // Use Imagen 3 model which is generally available and deployable
-      const response = await ai.models.generateImages({
-        model: 'imagen-3.0-generate-001', 
-        prompt: finalPrompt,
-        config: {
-          numberOfImages: 1,
-          outputMimeType: 'image/jpeg',
-          aspectRatio: aspectRatio as any, // Cast to any because TS enum definition might differ slightly but string values "1:1", "3:4", "9:16" are valid for Imagen
+  // 5. Execution with Fallback Logic
+  const generate = async (modelName: string, promptParts: any[]) => {
+      try {
+        console.log(`Attempting image generation with model: ${modelName}`);
+        
+        // MAPPING ASPECT RATIO
+        let targetRatio = aspectRatio;
+        if (aspectRatio === '4:5') {
+            targetRatio = '3:4';
         }
-      });
 
-      const base64Data = response.generatedImages?.[0]?.image?.imageBytes;
+        const response = await ai.models.generateContent({
+            model: modelName,
+            contents: { parts: promptParts },
+            config: {
+                imageConfig: {
+                    aspectRatio: targetRatio as any
+                }
+            }
+        });
+        
+        if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) {
+                    return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                }
+            }
+        }
+        
+        if (response.text) {
+             console.warn(`Model ${modelName} returned text instead of image:`, response.text);
+        }
+        
+        return null;
+      } catch (e: any) {
+          // IMPORTANT: Propagate Rate Limits so App.tsx can handle backoff
+          if (e.message?.includes('429') || e.message?.includes('RESOURCE_EXHAUSTED')) {
+              throw e;
+          }
+          console.warn(`Error with model ${modelName}:`, e);
+          return null;
+      }
+  };
+
+  // Attempt 1: Primary Model (2.5) - Full Prompt
+  let image = await generate(IMAGE_MODEL_PRIMARY, fullParts);
+
+  // Attempt 2: Fallback Model (2.0) - Full Prompt
+  if (!image) {
+      console.log("Attempt 1 failed. Switching to fallback model...");
+      image = await generate(IMAGE_MODEL_FALLBACK, fullParts);
+  }
+
+  // Attempt 3: Primary Model (2.5) - Simplified Prompt (No Body Text, But keep Visual Footer)
+  // If previous attempts failed (likely due to safety filters on text rendering), try just the visual art + footer logos.
+  if (!image) {
+      console.log("Attempt 2 failed. Switching to SIMPLIFIED prompt (Text-Free Body)...");
       
-      if (!base64Data) {
-        throw new Error("No image data returned from Imagen.");
+      const simplePrompt = `
+        Create a high-quality illustration.
+        
+        Visual Description: ${finalVisualPrompt}
+        
+        ${footerInstruction}
+        (Render the icons and handle clearly at the bottom as specified)
+        
+        Style: ${styleInstruction}
+        
+        Requirements: High resolution, photorealistic, professional composition. No main body text overlay, but INCLUDE the footer elements.
+      `;
+
+      const simpleParts: any[] = [{ text: simplePrompt }];
+      // Re-add reference image if exists
+      if (style === 'CUSTOM' && customConfig?.referenceImage) {
+           const base64Data = customConfig.referenceImage.split(',')[1];
+           const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
+           if (base64Data && mimeType) {
+                simpleParts.push({
+                   inlineData: {
+                       data: base64Data,
+                       mimeType: mimeType
+                   }
+                });
+           }
       }
 
-      return `data:image/jpeg;base64,${base64Data}`;
-
-  } catch (error) {
-      console.error("Imagen generation failed:", error);
-      throw error;
+      image = await generate(IMAGE_MODEL_PRIMARY, simpleParts);
   }
+
+  if (!image) {
+      throw new Error(`Failed to generate image after 3 attempts. Please try a different topic or style.`);
+  }
+
+  return image;
 };

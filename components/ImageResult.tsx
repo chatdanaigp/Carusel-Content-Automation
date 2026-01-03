@@ -5,9 +5,10 @@ interface ImageResultProps {
   image: GeneratedImage;
   downloadMode: DownloadMode;
   onPreview: (imageUrl: string) => void;
+  aspectRatio: string;
 }
 
-const ImageResult: React.FC<ImageResultProps> = ({ image, downloadMode, onPreview }) => {
+const ImageResult: React.FC<ImageResultProps> = ({ image, downloadMode, onPreview, aspectRatio }) => {
   // Auto-download logic
   useEffect(() => {
     if (downloadMode === 'AUTO' && image.status === 'success' && image.imageUrl) {
@@ -20,8 +21,18 @@ const ImageResult: React.FC<ImageResultProps> = ({ image, downloadMode, onPrevie
     }
   }, [image.status, image.imageUrl, image.slideId, downloadMode]);
 
+  const getAspectClass = () => {
+    switch (aspectRatio) {
+      case '3:4': return 'aspect-[3/4]';
+      case '4:5': return 'aspect-[4/5]'; // Support for 4:5 ratio
+      case '9:16': return 'aspect-[9/16]';
+      case '1:1': return 'aspect-square';
+      default: return 'aspect-square';
+    }
+  };
+
   return (
-    <div className="group relative aspect-video bg-slate-800 rounded-lg overflow-hidden border border-slate-700 shadow-md">
+    <div className={`group relative ${getAspectClass()} bg-slate-800 rounded-lg overflow-hidden border border-slate-700 shadow-md transition-all duration-300`}>
       {image.status === 'loading' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 z-10 backdrop-blur-sm">
           <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
@@ -39,11 +50,10 @@ const ImageResult: React.FC<ImageResultProps> = ({ image, downloadMode, onPrevie
             onClick={() => onPreview(image.imageUrl)}
           />
           
-          {/* Overlay controls - always allow manual download */}
+          {/* Overlay controls */}
           <div 
             className={`absolute inset-0 bg-black/40 transition-opacity flex items-center justify-center gap-2 pointer-events-none ${downloadMode === 'AUTO' ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}
           >
-             {/* We wrap buttons in pointer-events-auto to make them clickable despite parent pointer-events-none */}
             <a 
               href={image.imageUrl} 
               download={`trading-slide-${image.slideId}.png`}

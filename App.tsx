@@ -185,14 +185,16 @@ const App: React.FC = () => {
                 }
 
             } catch (e: any) {
-                // Check for 429 Rate Limit
+                // Check for 429 Rate Limit or 503 Service Unavailable
                 const is429 = e.message?.includes('429') || e.message?.includes('RESOURCE_EXHAUSTED') || JSON.stringify(e).includes('RESOURCE_EXHAUSTED');
+                const is503 = e.message?.includes('503') || e.message?.includes('Unavailable');
                 
-                if (is429) {
+                if (is429 || is503) {
                     attempts++;
                     // Exponential backoff: 5s, 10s, 15s...
                     const waitTime = 5000 * attempts;
-                    console.warn(`Rate limit hit for slide ${slide.id}. Waiting ${waitTime/1000}s before retry ${attempts}/${maxAttempts}...`);
+                    const errorType = is429 ? "Rate limit" : "Service unavailable";
+                    console.warn(`${errorType} for slide ${slide.id}. Waiting ${waitTime/1000}s before retry ${attempts}/${maxAttempts}...`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                     continue; // Retry loop
                 }
@@ -238,7 +240,7 @@ const App: React.FC = () => {
                 
                 if (success) break;
 
-                // If not 429 and not permission error (or permission fix failed), log and break.
+                // If not 429/503 and not permission error (or permission fix failed), log and break.
                 console.error(`Failed to generate image for slide ${slide.id}`, e);
                 break;
             }
@@ -271,7 +273,7 @@ const App: React.FC = () => {
   
   const ratioOptions = [
       { id: '1:1', label: 'Square (1:1)', desc: '1080x1080px' },
-      { id: '3:4', label: 'Portrait (3:4)', desc: '1080x1350px' },
+      { id: '4:5', label: 'Portrait (4:5)', desc: '1080x1350px' }, // Updated to 4:5 1080x1350px
       { id: '9:16', label: 'Story (9:16)', desc: '1080x1920px' },
   ];
 
@@ -667,7 +669,7 @@ const App: React.FC = () => {
                         return (
                         <div key={slide.id} className="flex flex-col gap-4">
                             <SlideCard slide={slide} />
-                            {img && <ImageResult image={img} downloadMode={downloadMode} onPreview={(url) => setPreviewImage(url)} />}
+                            {img && <ImageResult image={img} downloadMode={downloadMode} onPreview={(url) => setPreviewImage(url)} aspectRatio={aspectRatio} />}
                         </div>
                         );
                     })}
