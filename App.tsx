@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { generateContentIdeas, generateTradingSlides, generateInfographic } from './services/geminiService';
+import { generateContentIdeas, generateTradingSlides, generateInfographic, GEMINI_API_KEY } from './services/geminiService';
 import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea, UiDesignStyle, DesignStyle, DownloadMode, SocialConfig, CustomStyleConfig } from './types';
 import ApiKeyGuard from './components/ApiKeyGuard';
 import SlideCard from './components/SlideCard';
@@ -198,7 +198,10 @@ const App: React.FC = () => {
                 }
 
                 // Check for Permission Error
-                if (isPermissionError(e) && window.aistudio?.openSelectKey) {
+                // ONLY handle dynamic key selection if we are NOT using a hardcoded key
+                const isHardcoded = GEMINI_API_KEY && GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE";
+                
+                if (isPermissionError(e) && !isHardcoded && window.aistudio?.openSelectKey) {
                      try {
                          await window.aistudio.openSelectKey();
                          // Retry with same params immediately after new key selection
@@ -259,6 +262,10 @@ const App: React.FC = () => {
       }
   };
 
+  // Determine if we should show the "Change API Key" button
+  // Only show if we are NOT using a hardcoded key
+  const isHardcodedKeySet = GEMINI_API_KEY && GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE";
+
   // UI Helpers
   const isGenerating = status === WorkflowStatus.GENERATING_IDEAS || status === WorkflowStatus.GENERATING_SLIDES || status === WorkflowStatus.GENERATING_IMAGES;
   
@@ -284,12 +291,19 @@ const App: React.FC = () => {
               </h1>
             </div>
             <div className="flex items-center gap-4">
-                 <button 
-                    onClick={handleChangeKey}
-                    className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1 rounded transition-all"
-                 >
-                    Change API Key
-                 </button>
+                 {!isHardcodedKeySet && (
+                     <button 
+                        onClick={handleChangeKey}
+                        className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1 rounded transition-all"
+                     >
+                        Change API Key
+                     </button>
+                 )}
+                 {isHardcodedKeySet && (
+                    <span className="text-xs text-emerald-500 font-mono bg-emerald-900/20 px-2 py-1 rounded border border-emerald-900/50">
+                        API Key Configured
+                    </span>
+                 )}
             </div>
           </div>
         </header>

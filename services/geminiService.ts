@@ -1,11 +1,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { SlideContent, ContentIdea, DesignStyle, SocialConfig, CustomStyleConfig } from "../types";
 
+// =============================================================================================
+// 🔑 API KEY CONFIGURATION
+// นำ API Key ของคุณมาวางแทนที่ข้อความในเครื่องหมายคำพูดด้านล่างนี้
+// =============================================================================================
+export const GEMINI_API_KEY: string = "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA"; 
+// =============================================================================================
+
 // Helper to initialize AI client. 
 // Note: We create a new instance per call to ensure latest API key is used if re-selected.
 const getAiClient = () => {
-  // Restore usage of process.env.API_KEY as requested for standard/free tier usage
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Use the hardcoded key if provided, otherwise fallback to empty string (which will cause error if not handled)
+  const apiKey = GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : (process.env.API_KEY || "");
+  return new GoogleGenAI({ apiKey: apiKey });
 };
 
 export const generateContentIdeas = async (keyword: string, language: 'TH' | 'EN'): Promise<ContentIdea[]> => {
@@ -141,8 +149,9 @@ export const generateInfographic = async (
             FOOTER SECTION (Bottom of image):
             - Layout: A clean, horizontal row at the very bottom.
             - Content to Display: ${footerItems}
-            - CRITICAL INSTRUCTION: You MUST use the actual LOGO ICONS for ${activePlatforms.map(p => p.name).join(', ')}. 
-            - DO NOT write the platform name (e.g. do not write "Tiktok") as text. Only the username/handle should be text.
+            - STRICT RULE: DISPLAY ONLY ICONS AND HANDLES.
+            - FORBIDDEN: DO NOT WRITE THE TEXT "${activePlatforms.map(p => p.name).join('" OR "')}". 
+            - Example: Show [TikTok Icon] @handle. Do NOT show "TikTok @handle".
             - Visual Style: Minimalist, professional icons. Text should be small but readable.
           `;
       } else {
@@ -211,7 +220,8 @@ export const generateInfographic = async (
             2. Text 1: "${contentText}" - HUD/Terminal font style.
             3. Visual (Center): "${visualPrompt}" - Holographic, wireframe 3D chart, glowing edges.
             4. Text 2: "${contentText}" - HUD style.
-            5. Footer.
+            5. Footer:
+            ${footerInstruction}
             
             Palette: Black, Cyan, Magenta.
             Aspect Ratio: ${aspectRatio}.
@@ -240,7 +250,8 @@ export const generateInfographic = async (
             2. Text 1: "${contentText}" - Elegant White.
             3. Visual (Center): "${visualPrompt}" - Realistic, cinematic lighting, gold accents on charts.
             4. Text 2: "${contentText}".
-            5. Footer.
+            5. Footer:
+            ${footerInstruction}
             
             Palette: Black, Gold, White.
             Aspect Ratio: ${aspectRatio}.
@@ -269,7 +280,8 @@ export const generateInfographic = async (
             2. Text 1: "${contentText}" - Clean Dark Grey.
             3. Visual (Center): "${visualPrompt}" - Flat vector, clean lines, isometric, no gradients.
             4. Text 2: "${contentText}".
-            5. Footer.
+            5. Footer:
+            ${footerInstruction}
             
             Palette: White background, Black text, One accent color.
             Aspect Ratio: ${aspectRatio}.
@@ -298,7 +310,8 @@ export const generateInfographic = async (
           2. Text 1: "${contentText}".
           3. Visual: "${visualPrompt}" - Abstract 3D, Gradient shapes, clean interface.
           4. Text 2: "${contentText}".
-          5. Footer.
+          5. Footer:
+          ${footerInstruction}
           
           Aspect Ratio: ${aspectRatio}.
         `;
@@ -327,7 +340,8 @@ export const generateInfographic = async (
             2. Text 1: "${contentText}".
             3. Visual: "${visualPrompt}" - Professional Trading Chart/Graph. Dark mode.
             4. Text 2: "${contentText}".
-            5. Footer.
+            5. Footer:
+            ${footerInstruction}
             
             Aspect Ratio: ${aspectRatio}.
         `;
