@@ -3,15 +3,19 @@ import { SlideContent, ContentIdea, DesignStyle, SocialConfig, CustomStyleConfig
 
 // =============================================================================================
 // 🔑 API KEY CONFIGURATION
-// นำ API Key ของคุณมาวางแทนที่ข้อความในเครื่องหมายคำพูดด้านล่างนี้
+// Security Warning: Do NOT hardcode your API Key here if pushing to GitHub.
+// For Vercel/Production: Set the 'API_KEY' environment variable in your project settings.
 // =============================================================================================
-export const GEMINI_API_KEY: string = "AIzaSyAwYK2a2e_ZsXanNb7jfBPe8d0x2TRYgjA"; 
+export const GEMINI_API_KEY: string = ""; 
 // =============================================================================================
 
 // Helper to initialize AI client. 
 const getAiClient = () => {
-  const apiKey = GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : (process.env.API_KEY || "");
-  return new GoogleGenAI({ apiKey: apiKey });
+  // Prioritize Environment Variable (Vercel) -> Then Hardcoded (Local Dev)
+  const apiKey = process.env.API_KEY || (GEMINI_API_KEY !== "PASTE_YOUR_API_KEY_HERE" ? GEMINI_API_KEY : "");
+  
+  // Note: The app handles missing keys via ApiKeyGuard, so we can initialize safely here.
+  return new GoogleGenAI({ apiKey: apiKey || "" });
 };
 
 // 🔥 MODEL CONFIGURATION
