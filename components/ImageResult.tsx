@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useImperativeHandle, forwardRef } from 'react'; // Added forwardRef, useImperativeHandle
 import { GeneratedImage, DownloadMode } from '../types';
+import html2canvas from 'html2canvas'; // Import html2canvas
 
 interface ImageResultProps {
   image: GeneratedImage;
@@ -11,9 +12,13 @@ interface ImageResultProps {
   onRepromptImage: (slideId: number, newPrompt: string) => Promise<void>;
   onApplyStyleToAll: (sourceSlideId: number) => Promise<void>;
   isGeneratingAll: boolean; // Indicates if the overall workflow is in the GENERATING_IMAGES phase
+  slideTitle: string; // New: pass slide title for combined export
+  slideContent: string; // New: pass slide content for combined export
+  currentLanguage: 'TH' | 'EN'; // New: pass current language for combined export
 }
 
-const ImageResult: React.FC<ImageResultProps> = ({ 
+// Use forwardRef to allow parent components to access DOM node or methods
+const ImageResult = forwardRef<HTMLDivElement & { exportToPngWithText?: () => Promise<string | null> }, ImageResultProps>(({ 
   image, 
   downloadMode, 
   onPreview, 
@@ -21,34 +26,90 @@ const ImageResult: React.FC<ImageResultProps> = ({
   currentVisualPrompt,
   onRepromptImage,
   onApplyStyleToAll,
-  isGeneratingAll
-}) => {
+  isGeneratingAll,
+  slideTitle, // Destructure new prop
+  slideContent, // Destructure new prop
+  currentLanguage, // Destructure new prop
+}, ref) => {
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [editedPrompt, setEditedPrompt] = useState(currentVisualPrompt);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // Ref for the hidden container to capture with html2canvas
+  const hiddenCanvasContainerRef = useRef<HTMLDivElement>(null); 
 
   // Update editedPrompt if the original visualPrompt changes from parent
   useEffect(() => {
     setEditedPrompt(currentVisualPrompt);
   }, [currentVisualPrompt]);
 
+  // Expose exportToPngWithText function to parent via ref
+  useImperativeHandle(ref, () => ({
+    exportToPngWithText: async () => {
+      if (hiddenCanvasContainerRef.current) {
+        try {
+          // Ensure the image has loaded within the hidden container before capturing
+          const imgElement = hiddenCanvasContainerRef.current.querySelector('img');
+          if (imgElement && !imgElement.complete) {
+            await new Promise(resolve => { imgElement.onload = resolve; });
+          }
+
+          const canvas = await html2canvas(hiddenCanvasContainerRef.current, {
+            useCORS: true, // Required if images are from different origin
+            allowTaint: true, // Allow images to be "tainted" on the canvas
+            backgroundColor: null, // Transparent background if not explicitly set
+            scale: 2, // Increase resolution for better quality
+          });
+          return canvas.toDataURL('image/png');
+        } catch (error) {
+          console.error("Error capturing element to PNG:", error);
+          return null;
+        }
+      }
+      return null;
+    }
+  }), [image.imageUrl, slideTitle, slideContent, aspectRatio, hiddenCanvasContainerRef]);
+
+
   // Auto-download logic
   useEffect(() => {
     // Image should download automatically as soon as it's a success, regardless of batch generation status
+    // And if downloadMode is 'AUTO', regardless of currentLanguage
     if (downloadMode === 'AUTO' && image.status === 'success' && image.imageUrl) {
-      const link = document.createElement('a');
-      link.href = image.imageUrl;
-      link.download = `trading-slide-${image.slideId}-${Date.now()}.png`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+        const performDownload = async () => {
+            let downloadUrl = image.imageUrl;
+
+            // Always use exportToPngWithText for auto-download if we have text to overlay
+            if (hiddenCanvasContainerRef.current && slideTitle && slideContent) {
+                try {
+                    const canvas = await html2canvas(hiddenCanvasContainerRef.current, { 
+                      useCORS: true, 
+                      allowTaint: true, 
+                      backgroundColor: null,
+                      scale: 2, // Double resolution for download
+                    });
+                    downloadUrl = canvas.toDataURL('image/png');
+                } catch (error) {
+                    console.error("Error generating combined image for auto-download:", error);
+                    // Fallback to original image if combination fails
+                }
+            }
+            
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = `trading-slide-${image.slideId}-${currentLanguage}-${Date.now()}.png`; // Include language in filename
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+        performDownload();
     }
-  }, [image.status, image.imageUrl, image.slideId, downloadMode]);
+  }, [image.status, image.imageUrl, image.slideId, downloadMode, slideTitle, slideContent, currentLanguage]);
 
   const getAspectClass = () => {
     switch (aspectRatio) {
       case '3:4': return 'aspect-[3/4]';
-      case '4:5': return 'aspect-[4/5]'; // Support for 4:5 ratio
+      case '4:5': return 'aspect-[4/5]'; 
       case '9:16': return 'aspect-[9/16]';
       case '1:1': return 'aspect-square';
       default: return 'aspect-square';
@@ -108,7 +169,9 @@ const ImageResult: React.FC<ImageResultProps> = ({
 
   return (
     <div className="relative">
-      <div className={`group relative ${getAspectClass()} bg-slate-800 rounded-lg overflow-hidden border border-slate-700 shadow-md transition-all duration-300`}>
+      <div 
+        className={`group relative ${getAspectClass()} bg-slate-800 rounded-lg overflow-hidden border border-slate-700 shadow-md transition-all duration-300`}
+      >
         {renderStatusOverlay()}
         
         {image.status === 'success' ? (
@@ -118,6 +181,7 @@ const ImageResult: React.FC<ImageResultProps> = ({
               alt={`Slide ${image.slideId}`} 
               className="w-full h-full object-cover cursor-zoom-in hover:opacity-90 transition-opacity"
               onClick={() => onPreview(image.imageUrl)}
+              crossOrigin="anonymous" // Required for html2canvas (even if for hidden container)
             />
             
             {/* Overlay controls */}
@@ -126,10 +190,36 @@ const ImageResult: React.FC<ImageResultProps> = ({
             >
               <div className="flex gap-2">
                 <a 
-                  href={image.imageUrl} 
-                  download={`trading-slide-${image.slideId}.png`}
+                  href={image.imageUrl} // Default href, will be overridden by onClick
+                  download={`trading-slide-${image.slideId}-${currentLanguage}-${Date.now()}.png`} // Updated filename with language
                   className="pointer-events-auto bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-full font-bold text-xs transition-all shadow-lg transform hover:scale-105 flex items-center gap-2"
-                  onClick={(e) => e.stopPropagation()} 
+                  onClick={async (e) => { 
+                    e.stopPropagation();
+                    // On click, use the exposed ref method to get the combined image if available
+                    if (ref && 'current' in ref && ref.current && typeof ref.current.exportToPngWithText === 'function') {
+                        const exportedDataUrl = await ref.current.exportToPngWithText();
+                        if (exportedDataUrl) {
+                            const link = document.createElement('a');
+                            link.href = exportedDataUrl;
+                            link.download = `trading-slide-${image.slideId}-${currentLanguage}-${Date.now()}.png`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                        } else {
+                            console.error(`Failed to export combined image for slide ${image.slideId}, falling back to original image.`);
+                            // Fallback to original image if combination fails
+                            window.open(image.imageUrl, '_blank'); // Open in new tab
+                        }
+                    } else {
+                        // Fallback: direct download of the original image URL
+                        const link = document.createElement('a');
+                        link.href = image.imageUrl;
+                        link.download = `trading-slide-${image.slideId}-${currentLanguage}-${Date.now()}.png`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    }
+                  }} 
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -154,6 +244,7 @@ const ImageResult: React.FC<ImageResultProps> = ({
               <button 
                 onClick={(e) => { e.stopPropagation(); setIsEditingPrompt(true); }}
                 className="pointer-events-auto bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full font-bold text-xs transition-all shadow-lg transform hover:scale-105 flex items-center gap-2 mt-2"
+                disabled={isGeneratingAll} // Disable if overall generation is active (e.g., translation)
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                 Edit Image
@@ -183,6 +274,36 @@ const ImageResult: React.FC<ImageResultProps> = ({
           </div>
         )}
       </div>
+
+      {/* HIDDEN container for html2canvas to combine image and text for download */}
+      {/* This DIV is NEVER displayed to the user. It is only for canvas capture. */}
+      <div 
+        ref={hiddenCanvasContainerRef} 
+        className={getAspectClass()} 
+        style={{ position: 'absolute', top: 0, left: 0, opacity: 0, pointerEvents: 'none', zIndex: -1, width: '100%', height: '100%' }}
+      >
+        <img 
+          src={image.imageUrl} 
+          alt={`Slide ${image.slideId} - base`} 
+          className="w-full h-full object-cover" 
+          crossOrigin="anonymous" 
+        />
+        {/* Text overlay for html2canvas capture */}
+        <div 
+          className="absolute inset-0 flex flex-col items-center justify-center p-4 text-white font-sans text-center"
+          style={{
+            textShadow: '2px 2px 4px rgba(0,0,0,0.6)', // Add subtle shadow for readability
+          }}
+        >
+          <h3 className="text-xl md:text-2xl lg:text-3xl font-bold mb-2 p-2 leading-tight bg-black/30 rounded-md">
+            {slideTitle}
+          </h3>
+          <p className="text-sm md:text-base lg:text-lg mt-2 p-2 leading-relaxed bg-black/30 rounded-md max-w-[80%]">
+            {slideContent}
+          </p>
+        </div>
+      </div>
+
 
       {/* Edit Prompt Modal */}
       {isEditingPrompt && (
@@ -220,6 +341,6 @@ const ImageResult: React.FC<ImageResultProps> = ({
       )}
     </div>
   );
-};
+});
 
 export default ImageResult;

@@ -49,6 +49,7 @@ export enum WorkflowStatus {
   IDEAS_READY = 'IDEAS_READY',
   GENERATING_SLIDES = 'GENERATING_SLIDES', // generating text slides
   GENERATING_IMAGES = 'GENERATING_IMAGES', // generating images
+  TRANSLATING_TEXT = 'TRANSLATING_TEXT', // New: for when text is being translated
   COMPLETED = 'COMPLETED',
 }
 
@@ -58,17 +59,15 @@ export enum CustomTextInputMode {
 }
 
 // FIX: To resolve the "Subsequent property declarations must have the same type" error for 'aistudio',
-// and because the error message explicitly indicates that the property expects type 'AIStudio',
-// we define the 'AIStudio' interface and then reference it within the global Window interface.
-// This ensures a consistent type definition for 'window.aistudio'.
-// Update: Inlining the interface definition directly into 'Window' to bypass potential
-// subtle conflicts that might arise from named interface merging in complex environments.
-interface AIStudio {
-  hasSelectedApiKey: () => Promise<boolean>;
-  openSelectKey: () => Promise<void>;
-}
-
+// explicitly define the 'AIStudio' interface in the global scope and then use it as the type for 'window.aistudio'.
+// This ensures a consistent type definition that aligns with what TypeScript expects,
+// resolving conflicts where 'AIStudio' might be expected by other declarations or types.
 declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+
   interface Window {
     aistudio?: AIStudio;
     process?: {

@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { generateContentIdeas, generateTradingSlides, generateInfographic, generateVisualPrompt, TEXT_MODEL, INTERNAL_IMAGE_MODEL_FALLBACK } from './services/geminiService';
+import React, { useState, useRef, useEffect, createRef } from 'react'; // Added createRef
+import { generateContentIdeas, generateTradingSlides, generateInfographic, generateVisualPrompt, translateSlideContent, TEXT_MODEL, INTERNAL_IMAGE_MODEL_FALLBACK } from './services/geminiService';
 import { SlideContent, GeneratedImage, WorkflowStatus, ContentIdea, UiDesignStyle, DesignStyle, DownloadMode, SocialConfig, CustomStyleConfig, CustomTextInputMode } from './types';
 import SlideCard from './components/SlideCard';
 import ImageResult from './components/ImageResult';
@@ -11,6 +11,10 @@ const App: React.FC = () => {
   const [aspectRatio, setAspectRatio] = useState<string>('1:1');
   const [status, setStatus] = useState<WorkflowStatus>(WorkflowStatus.IDLE);
   
+  // API Key State
+  const [isApiKeyReady, setIsApiKeyReady] = useState(false);
+  const [loadingApp, setLoadingApp] = useState(true); // Renamed to avoid conflict with `isGenerating`
+
   // New State for custom input
   const [inputMode, setInputMode] = useState<CustomTextInputMode>(CustomTextInputMode.KEYWORD);
   const [customTextInput, setCustomTextInput] = useState('');
@@ -53,6 +57,44 @@ const App: React.FC = () => {
   const [images, setImages] = useState<GeneratedImage[]>([]);
   
   const [error, setError] = useState<string | null>(null);
+
+  // Refs for ImageResult components to call exportToPngWithText
+  const imageResultRefs = useRef<(HTMLDivElement & { exportToPngWithText?: () => Promise<string | null> })[]>([]);
+
+  // =======================================================================================================
+  // 🔑 API KEY CHECK - Moved from ApiKeyGuard.tsx
+  // This ensures a valid API key is present before the main app UI is rendered and API calls are attempted.
+  // =======================================================================================================
+  useEffect(() => {
+    const checkApiKeyStatus = async () => {
+      try {
+        if (window.aistudio && window.aistudio.hasSelectedApiKey) {
+          const selected = await window.aistudio.hasSelectedApiKey();
+          setIsApiKeyReady(selected);
+        } else {
+          setIsApiKeyReady(!!process.env.API_KEY);
+        }
+      } catch (e) {
+        console.error("Error checking API key status:", e);
+        setIsApiKeyReady(!!process.env.API_KEY); // Fallback check
+      } finally {
+        setLoadingApp(false);
+      }
+    };
+    checkApiKeyStatus();
+  }, []);
+
+  const handleSelectApiKey = async () => {
+    if (window.aistudio && window.aistudio.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      // Per guideline: assume success and immediately set API key as ready.
+      setIsApiKeyReady(true);
+      // No need to re-check hasSelectedApiKey or add delay due to race condition guidance.
+      // The next GoogleGenAI instance created in geminiService will pick up the updated key.
+    }
+  };
+  // =======================================================================================================
+
 
   // Helper for image upload
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -103,6 +145,7 @@ const App: React.FC = () => {
     setSlides([]);
     setImages([]);
     setError(null);
+    imageResultRefs.current = []; // Clear refs on reset
   };
 
 
@@ -198,6 +241,7 @@ const App: React.FC = () => {
     setSlides([]);
     setImages([]);
     setSelectedIdea(null); // Clear selected idea
+    imageResultRefs.current = []; // Clear refs for new generation
 
     // Resolve the style for this generation session
     let activeStyle: DesignStyle = 'ORIGINAL';
@@ -276,6 +320,7 @@ const App: React.FC = () => {
   const handleSelectIdea = async (idea: ContentIdea) => {
     setSelectedIdea(idea);
     setStatus(WorkflowStatus.GENERATING_SLIDES);
+    imageResultRefs.current = []; // Clear refs for new generation
     
     // Resolve the style for this generation session
     let activeStyle: DesignStyle = 'ORIGINAL';
@@ -323,7 +368,13 @@ const App: React.FC = () => {
     }
   };
 
-  const generateImagesSequentially = async (slideData: SlideContent[], style: DesignStyle, selectedModel: 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview', currentCustomConfig?: CustomStyleConfig) => {
+  const generateImagesSequentially = async (
+    slideData: SlideContent[], 
+    style: DesignStyle, 
+    selectedModel: 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview', 
+    currentCustomConfig?: CustomStyleConfig,
+    sourceImages?: GeneratedImage[] // Optional: pass source images for reference style (currently not used in this iteration)
+  ) => {
     setStatus(WorkflowStatus.GENERATING_IMAGES);
 
     // Using a loop to process sequentially to handle auth errors gracefully and rate limits
@@ -344,8 +395,13 @@ const App: React.FC = () => {
         while (attempts < maxAttempts && !success) {
             try {
                 // Determine which custom config to use: a new one for global style apply, or the current state's
-                const configToUse = currentCustomConfig || customStyleConfig;
+                let configToUse = currentCustomConfig || customStyleConfig;
                 
+                // IMPORTANT: For language regeneration, we are NOT re-generating images here.
+                // The `sourceImages` parameter was intended for a previous approach.
+                // For this refined approach, `generateImagesSequentially` is only for initial generation.
+                // Language regeneration logic will directly use `exportToPngWithText` from ImageResult.
+
                 // Pass content text, isTitleSlide flag, design style AND social config
                 const base64Image = await generateInfographic(
                     slide.visualPrompt, 
@@ -355,7 +411,7 @@ const App: React.FC = () => {
                     isTitleSlide,
                     style,
                     socialConfig,
-                    configToUse,
+                    configToUse, // Pass the determined configToUse
                     selectedModel // Pass the selected image model
                 );
                 
@@ -396,6 +452,7 @@ const App: React.FC = () => {
                          // Do not add delay. The next iteration/retry of generateInfographic will pick up the updated process.env.API_KEY.
                          
                          // We must retry the *entire* call with the potentially new API key.
+                         const configToUseRetry = currentCustomConfig || customStyleConfig; // Re-evaluate config if needed for retry
                          const base64ImageRetry = await generateInfographic(
                             slide.visualPrompt, 
                             slide.title, 
@@ -404,7 +461,7 @@ const App: React.FC = () => {
                             isTitleSlide,
                             style,
                             socialConfig,
-                            (currentCustomConfig || customStyleConfig),
+                            configToUseRetry, // Pass the determined configToUse for retry
                             selectedModel 
                          );
                          setImages(prev => prev.map(img => 
@@ -515,11 +572,84 @@ const App: React.FC = () => {
     await generateImagesSequentially(slides, 'CUSTOM', imageModel, newCustomStyleConfig);
   };
 
+  const handleDownloadAll = async () => {
+    if (!allImagesSuccessful) return; // Should be guarded by showDownloadAllButton anyway
+
+    for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        const slide = slides.find(s => s.id === img.slideId);
+        if (!slide || !img.imageUrl || img.status !== 'success') continue;
+
+        let downloadUrl = img.imageUrl;
+        
+        // If language has been changed, or current language is different from initial generation,
+        // use ImageResult's export function to get the combined image with current (translated) text.
+        // This implicitly assumes that if language changed, we want the overlaid version.
+        // For simplicity, we'll always use the exportToPngWithText for download if a ref exists,
+        // as this ensures the most up-to-date text (translated or original) is included.
+        const imageRef = imageResultRefs.current[i];
+        if (imageRef && typeof imageRef.exportToPngWithText === 'function') {
+            const exportedDataUrl = await imageRef.exportToPngWithText();
+            if (exportedDataUrl) {
+                downloadUrl = exportedDataUrl;
+            } else {
+                console.error(`Failed to export combined image for slide ${slide.id}, falling back to original image.`);
+                // Fallback to original downloadUrl if combination fails
+            }
+        } else {
+            console.warn(`Ref or exportToPngWithText not found for image ${slide.id}. Downloading raw image.`);
+        }
+
+
+        // Delay and then download
+        await new Promise(resolve => setTimeout(resolve, i * 500)); // 500ms delay between each download
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = `trading-slide-${img.slideId}-${language}-${Date.now()}.png`; // Unique filename, include language
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+  };
+
+  // New function to handle language regeneration for all slides
+  const handleRegenerateLanguage = async (targetLang: 'TH' | 'EN') => {
+    if (isGenerating || !selectedIdea || slides.length === 0 || images.length === 0 || language === targetLang) {
+      return; // Prevent re-triggering if already generating, no content, or same language
+    }
+    
+    setError(null);
+    setStatus(WorkflowStatus.TRANSLATING_TEXT); // Indicate translation phase
+    
+    try {
+      // 1. Translate the existing slides
+      const translatedSlides = await translateSlideContent(slides, targetLang);
+      setSlides(translatedSlides); // Update slides with translated content
+      setLanguage(targetLang); // Update the global language state
+
+      // 2. IMPORTANT: We do NOT re-generate images here.
+      // The images state remains the same (original generated images).
+      // The `ImageResult` components will receive the *translated* slide content via props
+      // and will handle combining the original image with new text at download time.
+
+      setStatus(WorkflowStatus.COMPLETED); // Translation complete, UI should reflect translated text for potential download
+      
+    } catch (err) {
+      console.error("Error translating content:", err);
+      setError(err instanceof Error ? err.message : 'Error translating content.');
+      setStatus(WorkflowStatus.IDLE);
+    }
+  };
 
   // UI Helpers
-  const isGenerating = status === WorkflowStatus.GENERATING_IDEAS || status === WorkflowStatus.GENERATING_SLIDES || status === WorkflowStatus.GENERATING_IMAGES;
+  const isGenerating = status === WorkflowStatus.GENERATING_IDEAS || status === WorkflowStatus.GENERATING_SLIDES || status === WorkflowStatus.GENERATING_IMAGES || status === WorkflowStatus.TRANSLATING_TEXT;
+  const isTranslating = status === WorkflowStatus.TRANSLATING_TEXT;
   const isGeneratingAllImages = status === WorkflowStatus.GENERATING_IMAGES; // To disable controls during global re-generation
   
+  const allImagesSuccessful = images.length > 0 && images.every(img => img.status === 'success');
+  const showDownloadAllButton = downloadMode === 'MANUAL' && status === WorkflowStatus.COMPLETED && allImagesSuccessful;
+  const showLanguageRegenButtons = status === WorkflowStatus.COMPLETED && allImagesSuccessful;
+
   const ratioOptions = [
       { id: '1:1', label: 'Square (1:1)', desc: '1080x1080px' },
       { id: '4:5', label: 'Portrait (4:5)', desc: '1080x1350px' }, // Updated to 4:5 1080x1350px
@@ -549,350 +679,388 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-          
-          {/* STEP 1: Input & Configuration */}
-          <div className="max-w-3xl mx-auto mb-12 text-center">
-            
-            {!selectedIdea && (
-                <>
-                <h2 className="text-3xl font-bold mb-4">Content Idea Generator</h2>
-                <p className="text-slate-400 mb-8">
-                Generate content ideas or directly input custom slide content.
-                </p>
-
-                {/* Input Mode Toggle */}
-                <div className="flex justify-center mb-6">
-                    <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+        {/* =======================================================================================
+            API Key Guard UI - Re-introduced directly into App.tsx for initial check
+            ======================================================================================= */}
+        {loadingApp ? (
+            <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">Loading application...</div>
+        ) : !isApiKeyReady ? (
+            <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-slate-100 p-6">
+                <div className="max-w-md w-full bg-slate-800 p-8 rounded-xl shadow-lg border border-slate-700 text-center">
+                    <h2 className="text-2xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                        API Key Required
+                    </h2>
+                    <p className="mb-6 text-slate-300">
+                        Please select your Google GenAI API Key to proceed. For paid models, ensure your project has billing enabled.
+                    </p>
+                    {window.aistudio?.openSelectKey && (
                         <button
-                            onClick={() => setInputMode(CustomTextInputMode.KEYWORD)}
-                            disabled={isGenerating}
-                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                                inputMode === CustomTextInputMode.KEYWORD 
-                                ? 'bg-indigo-600 text-white shadow' 
-                                : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                            }`}
+                            onClick={handleSelectApiKey}
+                            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold transition-all shadow-lg hover:shadow-blue-500/20"
                         >
-                            Keyword Ideas
+                            Select API Key
                         </button>
-                        <button
-                            onClick={() => setInputMode(CustomTextInputMode.CUSTOM_TEXT)}
-                            disabled={isGenerating}
-                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                                inputMode === CustomTextInputMode.CUSTOM_TEXT 
-                                ? 'bg-indigo-600 text-white shadow' 
-                                : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                            }`}
-                        >
-                            Custom Content
-                        </button>
-                    </div>
+                    )}
+                    {!window.aistudio?.openSelectKey && (
+                        <p className="mt-4 text-xs text-slate-500">
+                            To use this app, please ensure your environment provides `process.env.API_KEY`.
+                        </p>
+                    )}
+                    <p className="mt-4 text-xs text-slate-500">
+                         Don't have a key or need billing? <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Learn more about billing</a>.
+                    </p>
                 </div>
+            </div>
+        ) : (
+            // FIX: Wrapped the main content in a React.Fragment to resolve parsing errors in the ternary operator.
+            <>
+            {/* =======================================================================================
+                Original App Main Content - Renders only if API Key is ready
+                ======================================================================================= */}
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+            
+            {/* STEP 1: Input & Configuration */}
+            <div className="max-w-3xl mx-auto mb-12 text-center">
+                
+                {!selectedIdea && (
+                    <>
+                    <h2 className="text-3xl font-bold mb-4">Content Idea Generator</h2>
+                    <p className="text-slate-400 mb-8">
+                    Generate content ideas or directly input custom slide content.
+                    </p>
 
-                {/* Controls Container */}
-                <div className="flex flex-col gap-6 mb-8 items-center bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50">
-                    
-                    {/* Top Row: Language & Download Mode */}
-                    <div className="flex flex-wrap gap-6 justify-center w-full">
-                        {/* Language Selection */}
-                        <div className="flex flex-col items-center gap-2">
-                            <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Language</label>
-                            <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
-                                <button
-                                    onClick={() => setLanguage('TH')}
-                                    disabled={isGenerating}
-                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                                        language === 'TH' 
-                                        ? 'bg-blue-600 text-white shadow' 
-                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                                    }`}
-                                >
-                                    Thai 🇹🇭
-                                </button>
-                                <button
-                                    onClick={() => setLanguage('EN')}
-                                    disabled={isGenerating}
-                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                                        language === 'EN' 
-                                        ? 'bg-blue-600 text-white shadow' 
-                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                                    }`}
-                                >
-                                    English 🇺🇸
-                                </button>
-                            </div>
-                        </div>
-
-                         {/* Download Mode */}
-                         <div className="flex flex-col items-center gap-2">
-                            <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Download Mode</label>
-                            <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
-                                <button
-                                    onClick={() => setDownloadMode('AUTO')}
-                                    disabled={isGenerating}
-                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                                        downloadMode === 'AUTO' 
-                                        ? 'bg-emerald-600 text-white shadow' 
-                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                                    }`}
-                                >
-                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
-                                    Auto
-                                </button>
-                                <button
-                                    onClick={() => setDownloadMode('MANUAL')}
-                                    disabled={isGenerating}
-                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                                        downloadMode === 'MANUAL' 
-                                        ? 'bg-emerald-600 text-white shadow' 
-                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                                    }`}
-                                >
-                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" /></svg>
-                                    Manual
-                                </button>
-                            </div>
+                    {/* Input Mode Toggle */}
+                    <div className="flex justify-center mb-6">
+                        <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                            <button
+                                onClick={() => setInputMode(CustomTextInputMode.KEYWORD)}
+                                disabled={isGenerating}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                    inputMode === CustomTextInputMode.KEYWORD 
+                                    ? 'bg-indigo-600 text-white shadow' 
+                                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                }`}
+                            >
+                                Keyword Ideas
+                            </button>
+                            <button
+                                onClick={() => setInputMode(CustomTextInputMode.CUSTOM_TEXT)}
+                                disabled={isGenerating}
+                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                    inputMode === CustomTextInputMode.CUSTOM_TEXT 
+                                    ? 'bg-indigo-600 text-white shadow' 
+                                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                }`}
+                            >
+                                Custom Content
+                            </button>
                         </div>
                     </div>
 
-                    <div className="w-full h-px bg-slate-700/50"></div>
-
-                    {/* Middle Row: Design Style */}
-                    <div className="flex flex-col items-center gap-2 w-full">
-                        <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Visual Style</label>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-2xl">
-                             <button
-                                onClick={() => setUiDesignStyle('ORIGINAL')}
-                                disabled={isGenerating}
-                                className={`
-                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
-                                    ${uiDesignStyle === 'ORIGINAL' 
-                                        ? 'bg-slate-700 border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.2)]' 
-                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
-                                `}
-                            >
-                                <span className={`font-bold text-sm ${uiDesignStyle === 'ORIGINAL' ? 'text-yellow-400' : 'text-slate-300'}`}>Original</span>
-                                <span className="text-[9px] opacity-70 mt-1">Navy & Gold</span>
-                            </button>
-
-                            <button
-                                onClick={() => setUiDesignStyle('MODERN')}
-                                disabled={isGenerating}
-                                className={`
-                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
-                                    ${uiDesignStyle === 'MODERN' 
-                                        ? 'bg-slate-700 border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.2)]' 
-                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
-                                `}
-                            >
-                                <span className={`font-bold text-sm ${uiDesignStyle === 'MODERN' ? 'text-cyan-300' : 'text-slate-300'}`}>Modern</span>
-                                <span className="text-[9px] opacity-70 mt-1">Slate & Neon</span>
-                            </button>
-
-                            <button
-                                onClick={() => setUiDesignStyle('CUSTOM')}
-                                disabled={isGenerating}
-                                className={`
-                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
-                                    ${uiDesignStyle === 'CUSTOM' 
-                                        ? 'bg-slate-700 border-pink-500 shadow-[0_0_15px_rgba(236,72,153,0.2)]' 
-                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
-                                `}
-                            >
-                                <span className={`font-bold text-sm ${uiDesignStyle === 'CUSTOM' ? 'text-pink-400' : 'text-slate-300'}`}>Custom</span>
-                                <span className="text-[9px] opacity-70 mt-1">Your Prompt + Ref</span>
-                            </button>
-
-                            <button
-                                onClick={() => setUiDesignStyle('RANDOM')}
-                                disabled={isGenerating}
-                                className={`
-                                    flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
-                                    ${uiDesignStyle === 'RANDOM' 
-                                        ? 'bg-slate-700 border-purple-400 shadow-[0_0_15px_rgba(192,132,252,0.2)]' 
-                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
-                                `}
-                            >
-                                <span className={`font-bold text-sm ${uiDesignStyle === 'RANDOM' ? 'text-purple-300' : 'text-slate-300'}`}>Surprise Me</span>
-                                <span className="text-[9px] opacity-70 mt-1">Random Variety</span>
-                            </button>
-                        </div>
+                    {/* Controls Container */}
+                    <div className="flex flex-col gap-6 mb-8 items-center bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50">
                         
-                        {/* CUSTOM STYLE INPUTS */}
-                        {uiDesignStyle === 'CUSTOM' && (
-                            <div className="w-full max-w-2xl mt-4 bg-slate-900/50 rounded-xl p-4 border border-pink-500/30 animate-fade-in text-left">
-                                <h4 className="text-sm font-bold text-pink-400 mb-3 flex items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>
-                                    Custom Style Configuration
-                                </h4>
-                                
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">Style Prompt (Describe the look, colors, vibe)</label>
-                                        <textarea
-                                            value={customStyleConfig.prompt}
-                                            onChange={(e) => setCustomStyleConfig(prev => ({ ...prev, prompt: e.target.value }))}
-                                            placeholder="E.g. Vintage newspaper aesthetic, beige background, typewriter font, highly detailed illustrations..."
-                                            className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-pink-500 min-h-[80px]"
-                                            disabled={isGenerating}
-                                        />
-                                    </div>
+                        {/* Top Row: Language & Download Mode */}
+                        <div className="flex flex-wrap gap-6 justify-center w-full">
+                            {/* Language Selection */}
+                            <div className="flex flex-col items-center gap-2">
+                                <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Language</label>
+                                <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                                    <button
+                                        onClick={() => setLanguage('TH')}
+                                        disabled={isGenerating}
+                                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                            language === 'TH' 
+                                            ? 'bg-blue-600 text-white shadow' 
+                                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                        }`}
+                                    >
+                                        Thai 🇹🇭
+                                    </button>
+                                    <button
+                                        onClick={() => setLanguage('EN')}
+                                        disabled={isGenerating}
+                                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                            language === 'EN' 
+                                            ? 'bg-blue-600 text-white shadow' 
+                                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                        }`}
+                                    >
+                                        English 🇺🇸
+                                    </button>
+                                </div>
+                            </div>
 
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">Reference Image (Optional - Styles the output based on this)</label>
-                                        <div className="flex items-center gap-4">
-                                            <input 
-                                                type="file" 
-                                                accept="image/*"
-                                                ref={fileInputRef}
-                                                onChange={handleImageUpload}
-                                                className="hidden"
-                                                id="ref-image-upload"
+                            {/* Download Mode */}
+                            <div className="flex flex-col items-center gap-2">
+                                <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Download Mode</label>
+                                <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                                    <button
+                                        onClick={() => setDownloadMode('AUTO')}
+                                        disabled={isGenerating}
+                                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                            downloadMode === 'AUTO' 
+                                            ? 'bg-emerald-600 text-white shadow' 
+                                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                        }`}
+                                    >
+                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+                                        Auto
+                                    </button>
+                                    <button
+                                        onClick={() => setDownloadMode('MANUAL')}
+                                        disabled={isGenerating}
+                                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                            downloadMode === 'MANUAL' 
+                                            ? 'bg-emerald-600 text-white shadow' 
+                                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                        }`}
+                                    >
+                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" /></svg>
+                                        Manual
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="w-full h-px bg-slate-700/50"></div>
+
+                        {/* Middle Row: Design Style */}
+                        <div className="flex flex-col items-center gap-2 w-full">
+                            <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Visual Style</label>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-2xl">
+                                <button
+                                    onClick={() => setUiDesignStyle('ORIGINAL')}
+                                    disabled={isGenerating}
+                                    className={`
+                                        flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                        ${uiDesignStyle === 'ORIGINAL' 
+                                            ? 'bg-slate-700 border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.2)]' 
+                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
+                                    `}
+                                >
+                                    <span className={`font-bold text-sm ${uiDesignStyle === 'ORIGINAL' ? 'text-yellow-400' : 'text-slate-300'}`}>Original</span>
+                                    <span className="text-[9px] opacity-70 mt-1">Navy & Gold</span>
+                                </button>
+
+                                <button
+                                    onClick={() => setUiDesignStyle('MODERN')}
+                                    disabled={isGenerating}
+                                    className={`
+                                        flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                        ${uiDesignStyle === 'MODERN' 
+                                            ? 'bg-slate-700 border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.2)]' 
+                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
+                                    `}
+                                >
+                                    <span className={`font-bold text-sm ${uiDesignStyle === 'MODERN' ? 'text-cyan-300' : 'text-slate-300'}`}>Modern</span>
+                                    <span className="text-[9px] opacity-70 mt-1">Slate & Neon</span>
+                                </button>
+
+                                <button
+                                    onClick={() => setUiDesignStyle('CUSTOM')}
+                                    disabled={isGenerating}
+                                    className={`
+                                        flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                        ${uiDesignStyle === 'CUSTOM' 
+                                            ? 'bg-slate-700 border-pink-500 shadow-[0_0_15px_rgba(236,72,153,0.2)]' 
+                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
+                                    `}
+                                >
+                                    <span className={`font-bold text-sm ${uiDesignStyle === 'CUSTOM' ? 'text-pink-400' : 'text-slate-300'}`}>Custom</span>
+                                    <span className="text-[9px] opacity-70 mt-1">Your Prompt + Ref</span>
+                                </button>
+
+                                <button
+                                    onClick={() => setUiDesignStyle('RANDOM')}
+                                    disabled={isGenerating}
+                                    className={`
+                                        flex flex-col items-center p-3 rounded-lg border transition-all relative overflow-hidden
+                                        ${uiDesignStyle === 'RANDOM' 
+                                            ? 'bg-slate-700 border-purple-400 shadow-[0_0_15px_rgba(192,132,252,0.2)]' 
+                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}
+                                    `}
+                                >
+                                    <span className={`font-bold text-sm ${uiDesignStyle === 'RANDOM' ? 'text-purple-300' : 'text-slate-300'}`}>Surprise Me</span>
+                                    <span className="text-[9px] opacity-70 mt-1">Random Variety</span>
+                                </button>
+                            </div>
+                            
+                            {/* CUSTOM STYLE INPUTS */}
+                            {uiDesignStyle === 'CUSTOM' && (
+                                <div className="w-full max-w-2xl mt-4 bg-slate-900/50 rounded-xl p-4 border border-pink-500/30 animate-fade-in text-left">
+                                    <h4 className="text-sm font-bold text-pink-400 mb-3 flex items-center gap-2">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>
+                                        Custom Style Configuration
+                                    </h4>
+                                    
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-1">Style Prompt (Describe the look, colors, vibe)</label>
+                                            <textarea
+                                                value={customStyleConfig.prompt}
+                                                onChange={(e) => setCustomStyleConfig(prev => ({ ...prev, prompt: e.target.value }))}
+                                                placeholder="E.g. Vintage newspaper aesthetic, beige background, typewriter font, highly detailed illustrations..."
+                                                className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-pink-500 min-h-[80px]"
                                                 disabled={isGenerating}
                                             />
-                                            <label 
-                                                htmlFor="ref-image-upload"
-                                                className="cursor-pointer bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-pink-500/50 text-slate-300 text-xs px-4 py-2 rounded-lg transition-all flex items-center gap-2"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                                {customStyleConfig.referenceImage ? 'Change Image' : 'Upload Image'}
-                                            </label>
+                                        </div>
 
-                                            {customStyleConfig.referenceImage && (
-                                                <div className="relative group">
-                                                    <img 
-                                                        src={customStyleConfig.referenceImage} 
-                                                        alt="Reference" 
-                                                        className="h-10 w-10 object-cover rounded border border-slate-600"
-                                                    />
-                                                    <button 
-                                                        onClick={clearReferenceImage}
-                                                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 shadow hover:bg-red-600"
-                                                        title="Remove"
-                                                    >
-                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
-                                                    </button>
-                                                </div>
-                                            )}
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-1">Reference Image (Optional - Styles the output based on this)</label>
+                                            <div className="flex items-center gap-4">
+                                                <input 
+                                                    type="file" 
+                                                    accept="image/*"
+                                                    ref={fileInputRef}
+                                                    onChange={handleImageUpload}
+                                                    className="hidden"
+                                                    id="ref-image-upload"
+                                                    disabled={isGenerating}
+                                                />
+                                                <label 
+                                                    htmlFor="ref-image-upload"
+                                                    className="cursor-pointer bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-pink-500/50 text-slate-300 text-xs px-4 py-2 rounded-lg transition-all flex items-center gap-2"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                                    {customStyleConfig.referenceImage ? 'Change Image' : 'Upload Image'}
+                                                </label>
+
+                                                {customStyleConfig.referenceImage && (
+                                                    <div className="relative group">
+                                                        <img 
+                                                            src={customStyleConfig.referenceImage} 
+                                                            alt="Reference" 
+                                                            className="h-10 w-10 object-cover rounded border border-slate-600"
+                                                        />
+                                                        <button 
+                                                            onClick={clearReferenceImage}
+                                                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 shadow hover:bg-red-600"
+                                                            title="Remove"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="w-full h-px bg-slate-700/50"></div>
-
-                    {/* Image Model Selection */}
-                    <div className="flex flex-col items-center gap-2 w-full">
-                        <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Image Model</label>
-                        <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
-                            <button
-                                onClick={() => setImageModel('gemini-2.5-flash-image')}
-                                disabled={isGenerating}
-                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                                    imageModel === 'gemini-2.5-flash-image' 
-                                    ? 'bg-purple-600 text-white shadow' 
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                                }`}
-                            >
-                                <span className="mr-1">🚀</span> Gemini 2.5 Flash (Free)
-                            </button>
-                            <button
-                                onClick={() => setImageModel('gemini-3-pro-image-preview')}
-                                disabled={isGenerating}
-                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                                    imageModel === 'gemini-3-pro-image-preview' 
-                                    ? 'bg-purple-600 text-white shadow' 
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                                }`}
-                            >
-                                <span className="mr-1">💎</span> Gemini 3 Pro Image (Paid)
-                            </button>
-                        </div>
-                        {imageModel === 'gemini-3-pro-image-preview' && (
-                            <p className="text-[10px] text-orange-400 mt-1">
-                                Using Gemini 3 Pro Image requires a Google Cloud project with billing enabled.
-                            </p>
-                        )}
-                    </div>
-
-                    <div className="w-full h-px bg-slate-700/50"></div>
-
-                    {/* Social Media Settings */}
-                    <SocialSettings 
-                        config={socialConfig} 
-                        onChange={setSocialConfig} 
-                        disabled={isGenerating}
-                    />
-
-                    <div className="w-full h-px bg-slate-700/50"></div>
-
-                    {/* Bottom Row: Aspect Ratio */}
-                    <div className="flex flex-col items-center gap-2 w-full">
-                         <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Aspect Ratio</label>
-                        <div className="grid grid-cols-3 gap-3 w-full max-w-lg">
-                            {ratioOptions.map((opt) => (
-                                <button
-                                    key={opt.id}
-                                    onClick={() => setAspectRatio(opt.id)}
-                                    disabled={isGenerating}
-                                    className={`
-                                        flex flex-col items-center justify-center p-2 rounded-lg border transition-all
-                                        ${aspectRatio === opt.id 
-                                            ? 'bg-blue-600/20 border-blue-500 text-white' 
-                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600 hover:bg-slate-750'}
-                                    `}
-                                >
-                                    <span className="font-bold text-sm">{opt.label}</span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-
-                {inputMode === CustomTextInputMode.KEYWORD ? (
-                    <div className="flex gap-2 p-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg">
-                        <input 
-                            type="text" 
-                            value={topic}
-                            onChange={(e) => setTopic(e.target.value)}
-                            placeholder="Enter keyword (e.g. Mindset, Risk, Sniper Entry)"
-                            disabled={isGenerating}
-                            className="flex-1 bg-transparent border-none outline-none px-4 py-2 text-white placeholder-slate-500"
-                            onKeyDown={(e) => e.key === 'Enter' && handleGenerateContent()}
-                        />
-                        <button
-                            onClick={handleGenerateContent}
-                            disabled={isGenerating || !topic.trim()}
-                            className={`
-                            px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2
-                            ${!isGenerating && topic.trim()
-                                ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' 
-                                : 'bg-slate-700 text-slate-400 cursor-not-allowed'}
-                            `}
-                        >
-                            {status === WorkflowStatus.GENERATING_IDEAS ? (
-                                <>
-                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    Thinking...
-                                </>
-                            ) : (
-                                <>
-                                    <span>Generate Ideas</span>
-                                </>
                             )}
-                        </button>
+                        </div>
+
+                        <div className="w-full h-px bg-slate-700/50"></div>
+
+                        {/* Image Model Selection */}
+                        <div className="flex flex-col items-center gap-2 w-full">
+                            <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Image Model</label>
+                            <div className="bg-slate-800 p-1 rounded-lg border border-slate-600 inline-flex">
+                                <button
+                                    onClick={() => setImageModel('gemini-2.5-flash-image')}
+                                    disabled={isGenerating}
+                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                        imageModel === 'gemini-2.5-flash-image' 
+                                        ? 'bg-purple-600 text-white shadow' 
+                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <span className="mr-1">🚀</span> Gemini 2.5 Flash (Free)
+                                </button>
+                                <button
+                                    onClick={() => setImageModel('gemini-3-pro-image-preview')}
+                                    disabled={isGenerating}
+                                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                                        imageModel === 'gemini-3-pro-image-preview' 
+                                        ? 'bg-purple-600 text-white shadow' 
+                                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <span className="mr-1">💎</span> Gemini 3 Pro Image (Paid)
+                                </button>
+                            </div>
+                            {imageModel === 'gemini-3-pro-image-preview' && (
+                                <p className="text-[10px] text-orange-400 mt-1">
+                                    Using Gemini 3 Pro Image requires a Google Cloud project with billing enabled.
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="w-full h-px bg-slate-700/50"></div>
+
+                        {/* Social Media Settings */}
+                        <SocialSettings 
+                            config={socialConfig} 
+                            onChange={setSocialConfig} 
+                            disabled={isGenerating}
+                        />
+
+                        <div className="w-full h-px bg-slate-700/50"></div>
+
+                        {/* Bottom Row: Aspect Ratio */}
+                        <div className="flex flex-col items-center gap-2 w-full">
+                            <label className="text-xs text-slate-500 uppercase font-bold tracking-wider">Aspect Ratio</label>
+                            <div className="grid grid-cols-3 gap-3 w-full max-w-lg">
+                                {ratioOptions.map((opt) => (
+                                    <button
+                                        key={opt.id}
+                                        onClick={() => setAspectRatio(opt.id)}
+                                        disabled={isGenerating}
+                                        className={`
+                                            flex flex-col items-center justify-center p-2 rounded-lg border transition-all
+                                            ${aspectRatio === opt.id 
+                                                ? 'bg-blue-600/20 border-blue-500 text-white' 
+                                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600 hover:bg-slate-750'}
+                                        `}
+                                    >
+                                        <span className="font-bold text-sm">{opt.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                     </div>
-                ) : (
-                    <div className="flex flex-col gap-4 p-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg">
-                        <textarea
-                            value={customTextInput}
-                            onChange={(e) => setCustomTextInput(e.target.value)}
-                            placeholder={`Enter your custom slide content here.
+
+                    {inputMode === CustomTextInputMode.KEYWORD ? (
+                        <div className="flex gap-2 p-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg">
+                            <input 
+                                type="text" 
+                                value={topic}
+                                onChange={(e) => setTopic(e.target.value)}
+                                placeholder="Enter keyword (e.g. Mindset, Risk, Sniper Entry)"
+                                disabled={isGenerating}
+                                className="flex-1 bg-transparent border-none outline-none px-4 py-2 text-white placeholder-slate-500"
+                                onKeyDown={(e) => e.key === 'Enter' && handleGenerateContent()}
+                            />
+                            <button
+                                onClick={handleGenerateContent}
+                                disabled={isGenerating || !topic.trim()}
+                                className={`
+                                px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2
+                                ${!isGenerating && topic.trim()
+                                    ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' 
+                                    : 'bg-slate-700 text-slate-400 cursor-not-allowed'}
+                                `}
+                            >
+                                {status === WorkflowStatus.GENERATING_IDEAS ? (
+                                    <>
+                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Thinking...
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>Generate Ideas</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-4 p-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg">
+                            <textarea
+                                value={customTextInput}
+                                onChange={(e) => setCustomTextInput(e.target.value)}
+                                placeholder={`Enter your custom slide content here.
 The first line will be the overall carousel title (and cover slide title).
 
 Use "Slide X: [Your Title]" to define new slides, where X is a number.
@@ -909,177 +1077,241 @@ Sub-headline: The survival guide for Gold Traders.
 
 Slide 2: What is Non-Farm Payroll?
 Content: Forex (FX) is the global marketplace for exchanging national currencies. It's the largest market in the world...`}
-                            disabled={isGenerating}
-                            className="flex-1 bg-transparent border border-slate-700 rounded-lg outline-none px-4 py-3 text-white placeholder-slate-500 min-h-[200px]"
-                        />
-                        <button
-                            onClick={handleGenerateContent}
-                            disabled={isGenerating || !customTextInput.trim()}
-                            className={`
-                            px-6 py-2 rounded-lg font-semibold transition-all flex items-center justify-center gap-2
-                            ${!isGenerating && customTextInput.trim()
-                                ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' 
-                                : 'bg-slate-700 text-slate-400 cursor-not-allowed'}
-                            `}
-                        >
-                            {isGenerating ? (
-                                <>
-                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    Processing Content...
-                                </>
-                            ) : (
-                                <>
-                                    <span>Generate Slides & Images</span>
-                                </>
-                            )}
-                        </button>
+                                disabled={isGenerating}
+                                className="flex-1 bg-transparent border border-slate-700 rounded-lg outline-none px-4 py-3 text-white placeholder-slate-500 min-h-[200px]"
+                            />
+                            <button
+                                onClick={handleGenerateContent}
+                                disabled={isGenerating || !customTextInput.trim()}
+                                className={`
+                                px-6 py-2 rounded-lg font-semibold transition-all flex items-center justify-center gap-2
+                                ${!isGenerating && customTextInput.trim()
+                                    ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' 
+                                    : 'bg-slate-700 text-slate-400 cursor-not-allowed'}
+                                `}
+                            >
+                                {status === WorkflowStatus.GENERATING_IDEAS ? (
+                                    <>
+                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Processing Content...
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>Generate Slides & Images</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    )}
+                    </>
+                )}
+
+                {/* Error Message */}
+                {error && (
+                    <div className="mt-4 p-4 bg-red-900/30 border border-red-500/50 rounded-lg text-red-200 text-sm">
+                        <strong>Error:</strong> {error}
                     </div>
                 )}
-                </>
-            )}
+            </div>
 
-            {/* Error Message */}
-            {error && (
-                <div className="mt-4 p-4 bg-red-900/30 border border-red-500/50 rounded-lg text-red-200 text-sm">
-                    <strong>Error:</strong> {error}
+            {/* STEP 2: Display & Select Ideas */}
+            {status === WorkflowStatus.IDEAS_READY && contentIdeas.length > 0 && !selectedIdea && (
+                <div className="animate-fade-in">
+                    <h3 className="text-xl font-bold mb-6 text-center text-slate-200">Select a Content Direction</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl mx-auto">
+                        {contentIdeas.map((idea) => (
+                            <button
+                                key={idea.id}
+                                onClick={() => handleSelectIdea(idea)}
+                                disabled={isGenerating}
+                                className="bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-blue-500/50 p-6 rounded-xl text-left transition-all hover:scale-[1.01] hover:shadow-xl group"
+                            >
+                                <h4 className="text-lg font-bold text-white group-hover:text-blue-400 mb-2">{idea.title}</h4>
+                                <p className="text-slate-400 text-sm">{idea.summary}</p>
+                                <div className="mt-4 text-xs font-semibold text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    Select this idea &rarr;
+                                </div>
+                            </button>
+                        ))}
+                    </div>
                 </div>
             )}
-          </div>
 
-          {/* STEP 2: Display & Select Ideas */}
-          {status === WorkflowStatus.IDEAS_READY && contentIdeas.length > 0 && !selectedIdea && (
-            <div className="animate-fade-in">
-                 <h3 className="text-xl font-bold mb-6 text-center text-slate-200">Select a Content Direction</h3>
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl mx-auto">
-                    {contentIdeas.map((idea) => (
-                        <button
-                            key={idea.id}
-                            onClick={() => handleSelectIdea(idea)}
-                            disabled={isGenerating}
-                            className="bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-blue-500/50 p-6 rounded-xl text-left transition-all hover:scale-[1.01] hover:shadow-xl group"
-                        >
-                            <h4 className="text-lg font-bold text-white group-hover:text-blue-400 mb-2">{idea.title}</h4>
-                            <p className="text-slate-400 text-sm">{idea.summary}</p>
-                            <div className="mt-4 text-xs font-semibold text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                                Select this idea &rarr;
+            {/* STEP 3: Workflow Progress & Results */}
+            {selectedIdea && (
+                <div className="animate-fade-in">
+                    {/* Workflow Header */}
+                    <div className="flex items-center justify-between mb-8 pb-4 border-b border-slate-800">
+                        <div>
+                            <button 
+                                onClick={handleResetWorkflow}
+                                className="text-xs text-slate-500 hover:text-white mb-1 flex items-center gap-1 px-3 py-1 bg-slate-800 rounded-md border border-slate-700 hover:border-slate-500 transition-colors"
+                                disabled={isGenerating}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0" /></svg>
+                                Start New Workflow
+                            </button>
+                            <h2 className="text-2xl font-bold text-white">{selectedIdea.title}</h2>
+                            <div className="flex items-center gap-2 mt-1">
+                                <span className="text-sm text-slate-400">{selectedIdea.summary}</span>
+                                <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700">
+                                    {uiDesignStyle === 'RANDOM' ? 'Surprise Style' : uiDesignStyle}
+                                </span>
                             </div>
-                        </button>
-                    ))}
-                 </div>
-            </div>
-          )}
-
-          {/* STEP 3: Workflow Progress & Results */}
-          {selectedIdea && (
-            <div className="animate-fade-in">
-                 {/* Workflow Header */}
-                 <div className="flex items-center justify-between mb-8 pb-4 border-b border-slate-800">
-                    <div>
-                        <button 
-                            onClick={handleResetWorkflow}
-                            className="text-xs text-slate-500 hover:text-white mb-1 flex items-center gap-1 px-3 py-1 bg-slate-800 rounded-md border border-slate-700 hover:border-slate-500 transition-colors"
-                            disabled={isGenerating}
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0" /></svg>
-                            Start New Workflow
-                        </button>
-                        <h2 className="text-2xl font-bold text-white">{selectedIdea.title}</h2>
-                        <div className="flex items-center gap-2 mt-1">
-                            <span className="text-sm text-slate-400">{selectedIdea.summary}</span>
-                            <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700">
-                                {uiDesignStyle === 'RANDOM' ? 'Surprise Style' : uiDesignStyle}
+                        </div>
+                        
+                        {/* Progress Badge */}
+                        <div className="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-full border border-slate-700">
+                            {status === WorkflowStatus.GENERATING_SLIDES && <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"/>}
+                            {status === WorkflowStatus.GENERATING_IMAGES && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"/>}
+                            {status === WorkflowStatus.TRANSLATING_TEXT && <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse"/>}
+                            {status === WorkflowStatus.COMPLETED && <span className="w-2 h-2 rounded-full bg-emerald-500"/>}
+                            
+                            <span className="text-xs font-mono font-bold uppercase">
+                                {status === WorkflowStatus.GENERATING_SLIDES && "Generating Content..."}
+                                {status === WorkflowStatus.GENERATING_IMAGES && "Creating Graphics..."}
+                                {status === WorkflowStatus.TRANSLATING_TEXT && "Translating Text..."}
+                                {status === WorkflowStatus.COMPLETED && "Done"}
                             </span>
                         </div>
                     </div>
-                    
-                    {/* Progress Badge */}
-                    <div className="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-full border border-slate-700">
-                        {status === WorkflowStatus.GENERATING_SLIDES && <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"/>}
-                        {status === WorkflowStatus.GENERATING_IMAGES && <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"/>}
-                        {status === WorkflowStatus.COMPLETED && <span className="w-2 h-2 rounded-full bg-emerald-500"/>}
-                        
-                        <span className="text-xs font-mono font-bold uppercase">
-                            {status === WorkflowStatus.GENERATING_SLIDES && "Generating Content..."}
-                            {status === WorkflowStatus.GENERATING_IMAGES && "Creating Graphics..."}
-                            {status === WorkflowStatus.COMPLETED && "Done"}
-                        </span>
-                    </div>
-                 </div>
 
-                 {/* Results */}
-                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    {/* Placeholders while generating text */}
-                    {status === WorkflowStatus.GENERATING_SLIDES && (
-                        Array.from({length: 4}).map((_, i) => (
-                             <div key={i} className="aspect-[3/4] bg-slate-800/50 rounded-lg animate-pulse border border-slate-800"></div>
-                        ))
+                    {/* New: Download All Button */}
+                    {showDownloadAllButton && (
+                        <div className="mb-4 text-center animate-fade-in">
+                            <button
+                                onClick={handleDownloadAll}
+                                className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full font-bold text-lg transition-all shadow-lg hover:shadow-emerald-500/30 flex items-center justify-center gap-3 mx-auto"
+                                title="Download all generated images"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                Download All Images
+                            </button>
+                        </div>
                     )}
 
-                    {/* Real Results */}
-                    {slides.map((slide) => {
-                        const img = images.find(i => i.slideId === slide.id);
-                        return (
-                        <div key={slide.id} className="flex flex-col gap-4">
-                            <SlideCard slide={slide} />
-                            {img && 
-                                <ImageResult 
-                                    image={img} 
-                                    downloadMode={downloadMode} 
-                                    onPreview={(url) => setPreviewImage(url)} 
-                                    aspectRatio={aspectRatio}
-                                    currentVisualPrompt={slide.visualPrompt} // Pass current prompt
-                                    onRepromptImage={handleRepromptImage}
-                                    onApplyStyleToAll={handleApplyStyleToAll}
-                                    isGeneratingAll={isGeneratingAllImages}
-                                />
-                            }
+                    {/* New: Regenerate Language Buttons */}
+                    {showLanguageRegenButtons && (
+                        <div className="mb-8 text-center animate-fade-in flex flex-wrap justify-center gap-4">
+                            <button
+                                onClick={() => handleRegenerateLanguage('TH')}
+                                disabled={isGenerating || language === 'TH'}
+                                className={`px-6 py-2 rounded-full font-bold transition-all shadow-lg flex items-center justify-center gap-2 
+                                    ${isGenerating || language === 'TH' 
+                                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed' 
+                                        : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/30'}`}
+                                title="Generate new images with Thai text, keeping current styles."
+                            >
+                                <span role="img" aria-label="Thai flag">🇹🇭</span>
+                                Regenerate in Thai
+                            </button>
+                            <button
+                                onClick={() => handleRegenerateLanguage('EN')}
+                                disabled={isGenerating || language === 'EN'}
+                                className={`px-6 py-2 rounded-full font-bold transition-all shadow-lg flex items-center justify-center gap-2 
+                                    ${isGenerating || language === 'EN' 
+                                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed' 
+                                        : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/30'}`}
+                                title="Generate new images with English text, keeping current styles."
+                            >
+                                <span role="img" aria-label="US flag">🇺🇸</span>
+                                Regenerate in English
+                            </button>
                         </div>
-                        );
-                    })}
-                </div>
-            </div>
-          )}
+                    )}
 
-          {/* IMAGE PREVIEW MODAL */}
-          {previewImage && (
-            <div 
-                className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in"
-                onClick={() => setPreviewImage(null)}
-            >
-                <div className="relative max-w-5xl w-full max-h-screen flex flex-col items-center">
-                    <img 
-                        src={previewImage} 
-                        alt="Preview" 
-                        className="max-h-[85vh] w-auto object-contain rounded-md shadow-2xl border border-slate-800"
-                        onClick={(e) => e.stopPropagation()}
-                    />
-                    
-                    <div className="mt-4 flex gap-4" onClick={(e) => e.stopPropagation()}>
-                        <button 
-                            onClick={() => setPreviewImage(null)}
-                            className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 rounded-full font-bold transition-all"
-                        >
-                            Close
-                        </button>
-                        <a 
-                            href={previewImage} 
-                            download={`trading-slide-preview-${Date.now()}.png`}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-full font-bold transition-all shadow-lg flex items-center gap-2"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                            </svg>
-                            Download High Res
-                        </a>
+
+                    {/* Results */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        {/* Placeholders while generating text */}
+                        {isTranslating && (
+                            Array.from({length: slides.length || 4}).map((_, i) => (
+                                <div key={i} className="aspect-[3/4] bg-slate-800/50 rounded-lg animate-pulse border border-slate-800"></div>
+                            ))
+                        )}
+                         {status === WorkflowStatus.GENERATING_SLIDES && (
+                            Array.from({length: 4}).map((_, i) => (
+                                <div key={i} className="aspect-[3/4] bg-slate-800/50 rounded-lg animate-pulse border border-slate-800"></div>
+                            ))
+                        )}
+
+                        {/* Real Results */}
+                        {slides.map((slide, index) => {
+                            const img = images.find(i => i.slideId === slide.id);
+                            // Ensure ref array has enough entries, or add new ones
+                            if (!imageResultRefs.current[index]) {
+                                imageResultRefs.current[index] = createRef<HTMLDivElement & { exportToPngWithText?: () => Promise<string | null> }>().current!;
+                            }
+                            return (
+                            <div key={slide.id} className="flex flex-col gap-4">
+                                <SlideCard slide={slide} />
+                                {img && 
+                                    <ImageResult 
+                                        ref={ref => (imageResultRefs.current[index] = ref!)} // Assign ref
+                                        image={img} 
+                                        downloadMode={downloadMode} 
+                                        onPreview={(url) => setPreviewImage(url)} 
+                                        aspectRatio={aspectRatio}
+                                        currentVisualPrompt={slide.visualPrompt} // Pass current prompt
+                                        onRepromptImage={handleRepromptImage}
+                                        onApplyStyleToAll={handleApplyStyleToAll}
+                                        isGeneratingAll={isGeneratingAllImages || isTranslating} // Disable edit controls during translation
+                                        slideTitle={slide.title} // Pass slide title for combined export
+                                        slideContent={slide.content} // Pass slide content for combined export
+                                        currentLanguage={language} // Pass current language for combined export
+                                    />
+                                }
+                            </div>
+                            );
+                        })}
                     </div>
                 </div>
-            </div>
-          )}
+            )}
 
-        </main>
+            {/* IMAGE PREVIEW MODAL */}
+            {previewImage && (
+                <div 
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in"
+                    onClick={() => setPreviewImage(null)}
+                >
+                    <div className="relative max-w-5xl w-full max-h-screen flex flex-col items-center">
+                        <img 
+                            src={previewImage} 
+                            alt="Preview" 
+                            className="max-h-[85vh] w-auto object-contain rounded-md shadow-2xl border border-slate-800"
+                            onClick={(e) => e.stopPropagation()}
+                        />
+                        
+                        <div className="mt-4 flex gap-4" onClick={(e) => e.stopPropagation()}>
+                            <button 
+                                onClick={() => setPreviewImage(null)}
+                                className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 rounded-full font-bold transition-all"
+                            >
+                                Close
+                            </button>
+                            <a 
+                                href={previewImage} 
+                                download={`trading-slide-preview-${Date.now()}.png`}
+                                className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-full font-bold transition-all shadow-lg flex items-center gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                Download High Res
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            </main>
+            </>
+        )}
       </div>
   );
 };

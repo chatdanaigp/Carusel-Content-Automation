@@ -178,6 +178,80 @@ export const generateVisualPrompt = async (title: string, content: string): Prom
   throw new Error(`Failed to generate visual prompt for title "${title}" after ${maxAttempts} attempts.`);
 };
 
+/**
+ * Translates the title and content of an array of SlideContent to a target language.
+ * @param slides The array of SlideContent objects to translate.
+ * @param targetLanguage The target language ('TH' for Thai, 'EN' for English).
+ * @returns A new array of SlideContent objects with translated title and content.
+ */
+export const translateSlideContent = async (slides: SlideContent[], targetLanguage: 'TH' | 'EN'): Promise<SlideContent[]> => {
+  const ai = getAiClient();
+  const translatedSlides: SlideContent[] = [];
+  const langInstruction = targetLanguage === 'TH' ? 'Thai' : 'English';
+
+  for (const slide of slides) {
+    let attempts = 0;
+    const maxAttempts = 3; // Max retries for each slide translation
+
+    while (attempts < maxAttempts) {
+      try {
+        const prompt = `
+          Translate the following JSON object's 'title' and 'content' fields into ${langInstruction}.
+          Maintain the 'id' and 'visualPrompt' fields as they are.
+          Return the response as a JSON object, exactly mirroring the input structure but with translated text.
+
+          Input JSON:
+          ${JSON.stringify({ id: slide.id, title: slide.title, content: slide.content, visualPrompt: slide.visualPrompt })}
+        `;
+
+        const response = await ai.models.generateContent({
+          model: TEXT_MODEL,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.NUMBER },
+                title: { type: Type.STRING },
+                content: { type: Type.STRING },
+                visualPrompt: { type: Type.STRING },
+              },
+              required: ["id", "title", "content", "visualPrompt"],
+            },
+          },
+        });
+
+        if (response.text) {
+          const translated = JSON.parse(response.text);
+          translatedSlides.push({
+            id: translated.id,
+            title: translated.title,
+            content: translated.content,
+            visualPrompt: translated.visualPrompt, // Keep original visual prompt
+          });
+          break; // Successfully translated, move to next slide
+        } else {
+          console.warn(`Attempt ${attempts + 1} failed: No text returned for translation of slide ${slide.id}. Retrying...`);
+        }
+      } catch (e: any) {
+        console.error(`Attempt ${attempts + 1} failed to translate slide ${slide.id}:`, e);
+      }
+      attempts++;
+      await new Promise(resolve => setTimeout(resolve, 2000 * attempts)); // Exponential backoff for translation
+    }
+
+    if (attempts === maxAttempts) {
+      console.error(`Failed to translate slide ${slide.id} after ${maxAttempts} attempts. Using original content.`);
+      translatedSlides.push(slide); // Fallback to original content if translation fails
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Small delay between slides for rate limits
+  }
+
+  return translatedSlides;
+};
+
+
 export const generateInfographic = async (
   visualPrompt: string, 
   titleText: string, 
@@ -191,7 +265,7 @@ export const generateInfographic = async (
 ): Promise<string> => {
   const ai = getAiClient();
 
-  // 2. Style Logic (Moved up to be used in Footer Logic)
+  // 2. Style Logic
   let styleInstruction = "";
   let iconStyle = "white or gold";
   switch (style) {
@@ -222,16 +296,14 @@ export const generateInfographic = async (
         break;
   }
 
-  // 1. Footer Logic with STRICT Pairing
+  // 1. Footer Logic
   let footerInstruction = "";
   if (socialConfig) {
       const activePlatforms = socialConfig.platforms.filter(p => p.selected);
       if (activePlatforms.length > 0) {
-          // More general instruction for the image model.
-          // The final rendering might not be perfect from the image model, but it tries.
           const footerElements = activePlatforms.map(p => {
               const handle = socialConfig.useSameHandle ? socialConfig.masterHandle : p.handle;
-              return `${p.name} (@${handle})`; // Example: TikTok (@crt.trader)
+              return `${p.name} (@${handle})`; 
           }).join(" / "); 
 
           footerInstruction = `
@@ -241,53 +313,75 @@ export const generateInfographic = async (
       }
   }
 
-  // 3. SPECIAL LOGIC FOR TITLE SLIDE (Preset Modes Only)
-  // If it's the first slide AND not custom mode, force a Typography/Poster layout
-  let finalVisualPrompt = visualPrompt;
-  let finalDesignDirectives = `
+  // MAPPING ASPECT RATIO
+  let targetRatio = aspectRatio;
+  if (aspectRatio === '4:5') {
+      targetRatio = '3:4'; // Gemini API supports 3:4 for portrait, not 4:5
+  }
+
+  let currentFullPrompt: string;
+  let currentSimplePrompt: string;
+
+  // --- Construct Prompts (UNIVERSAL for both image models) ---
+  let resolvedVisualTheme = visualPrompt;
+  let resolvedDesignDirectives = `
     - ${styleInstruction}
     - The text must be clearly visible and integrated into the design.
     - High resolution, sharp details.
     - Composition: Balanced, suitable for an educational slide.
   `;
 
+  // Special logic for title slide (applies to both models now for text integration)
   if (isTitleSlide && style !== 'CUSTOM') {
-      finalVisualPrompt = `
-        A high-impact TITLE SLIDE / COVER IMAGE.
-        Focus: Big, Bold, Catchy Typography for the Headline.
-        Background: Abstract and textural based on the ${style} style, designed to make the text pop.
-        Do NOT include distracting characters, complex scenes, or illustrations.
-        Vibe: "Must Click", "Secret Revealed", "Important Lesson".
-      `;
-      
-      finalDesignDirectives = `
-        - EMPHASIZE TYPOGRAPHY: The Headline must be the main visual element. Huge font size.
-        - LAYOUT: Poster style. Center or top-heavy alignment.
-        - BACKGROUND: Clean, premium, abstract texture that supports text readability.
-        - ${styleInstruction}
-      `;
+    resolvedVisualTheme = `
+      A high-impact TITLE SLIDE / COVER IMAGE.
+      Focus: Big, Bold, Catchy Typography for the Headline.
+      Background: Abstract and textural based on the ${style} style, designed to make the text pop.
+      Do NOT include distracting characters, complex scenes, or illustrations.
+      Vibe: "Must Click", "Secret Revealed", "Important Lesson".
+    `;
+    resolvedDesignDirectives = `
+      - EMPHASIZE TYPOGRAPHY: The Headline must be the main visual element. Huge font size.
+      - LAYOUT: Poster style. Center or top-heavy alignment.
+      - BACKGROUND: Clean, premium, abstract texture that supports text readability.
+      - ${styleInstruction}
+    `;
   }
 
-  // 4. Image Generation Prompt (Full Detail)
-  // Revised Full Prompt - less demanding on exact text rendering by the image model
-  const fullPrompt = `
+  // The prompt now universally instructs models to attempt embedding text.
+  currentFullPrompt = `
     Generate a high-quality, visually appealing infographic image suitable for a social media carousel.
     
-    **Primary Visual Theme:** Based on "${finalVisualPrompt}".
+    **Primary Visual Theme:** Based on "${resolvedVisualTheme}".
     
-    **Integrate the following text elements legibly within the image:**
-    - **Main Headline (prominent):** "${titleText}"
-    - **Supporting Text (clear):** "${contentText}"
+    **Visually support the following text content, and where possible, subtly incorporate key parts or keywords within the image while ensuring readability (if incorporated):**
+    - **Main Headline (theme):** "${titleText}"
+    - **Supporting Content (theme):** "${contentText}"
     
     ${footerInstruction}
     
     **Overall Design Directives:**
-    ${finalDesignDirectives}
+    ${resolvedDesignDirectives}
     - Ensure the composition is balanced and professional.
+    - Render text clearly in Thai language if the content is in Thai.
+  `;
+
+  currentSimplePrompt = `
+    Generate a high-quality illustrative image, serving as a background for an infographic.
+    
+    **Visual Concept:** "${resolvedVisualTheme}"
+    
+    ${footerInstruction} (Ensure icons and handles are present and subtle at the bottom).
+    
+    **Design Attributes:**
+    ${resolvedDesignDirectives}
+    - Avoid overcrowding. Focus on the core visual theme.
+    - Visually support the main headline and body text, integrating them where appropriate.
+    - Render text clearly in Thai language if the content is in Thai.
   `;
 
   // Construct parts for Full Prompt
-  const fullParts: any[] = [{ text: fullPrompt }];
+  const fullParts: any[] = [{ text: currentFullPrompt }];
   if (style === 'CUSTOM' && customConfig?.referenceImage) {
       const base64Data = customConfig.referenceImage.split(',')[1];
       const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
@@ -307,12 +401,6 @@ export const generateInfographic = async (
       try {
         console.log(`Attempting image generation with model: ${modelName}, prompt type: ${attemptType}`);
         
-        // MAPPING ASPECT RATIO
-        let targetRatio = aspectRatio;
-        if (aspectRatio === '4:5') {
-            targetRatio = '3:4';
-        }
-
         const response = await ai.models.generateContent({
             model: modelName,
             contents: { parts: promptParts },
@@ -359,29 +447,31 @@ export const generateInfographic = async (
   // 2. If selectedImageModel failed, try internal fallback (if different)
   if (!image && selectedImageModel !== INTERNAL_IMAGE_MODEL_FALLBACK) {
       console.log(`Initial attempt with ${selectedImageModel} failed. Trying internal fallback ${INTERNAL_IMAGE_MODEL_FALLBACK}...`);
-      image = await performGenerate(INTERNAL_IMAGE_MODEL_FALLBACK, fullParts, 'full', false);
+      
+      // For fallback, use the same currentSimplePrompt which now aims for text integration
+      const fallbackSimpleParts: any[] = [{ text: currentSimplePrompt }];
+      if (style === 'CUSTOM' && customConfig?.referenceImage) {
+           const base64Data = customConfig.referenceImage.split(',')[1];
+           const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
+           if (base64Data && mimeType) {
+                fallbackSimpleParts.push({
+                   inlineData: {
+                       data: base64Data,
+                       mimeType: mimeType
+                   }
+                });
+           }
+      }
+
+      image = await performGenerate(INTERNAL_IMAGE_MODEL_FALLBACK, fallbackSimpleParts, 'simplified', false);
   }
 
   // 3. If still no image, try selectedImageModel with SIMPLIFIED prompt.
-  // If this fails with 429, it means we've exhausted all options for this generation cycle,
-  // so propagate to App.tsx for external retry logic.
   if (!image) {
-      console.log("All full prompt attempts failed. Trying SIMPLIFIED prompt...");
-      // Revised Simplified Prompt - less demanding for fallback
-      const simplePrompt = `
-        Generate a high-quality illustrative image, serving as a background for an infographic.
-        
-        **Visual Concept:** "${finalVisualPrompt}"
-        
-        ${footerInstruction} (Ensure icons and handles are present and subtle at the bottom).
-        
-        **Design Attributes:**
-        ${finalDesignDirectives}
-        - Avoid overcrowding. Focus on the core visual theme.
-        - No need to integrate specific main headline or body text overlay; design primarily for background.
-      `;
-
-      const simpleParts: any[] = [{ text: simplePrompt }];
+      console.log(`All full prompt attempts failed. Trying selected model (${selectedImageModel}) with SIMPLIFIED prompt...`);
+      
+      // Construct simple parts from currentSimplePrompt (determined unconditionally earlier)
+      const simpleParts: any[] = [{ text: currentSimplePrompt }];
       if (style === 'CUSTOM' && customConfig?.referenceImage) {
            const base64Data = customConfig.referenceImage.split(',')[1];
            const mimeType = customConfig.referenceImage.split(',')[0].split(':')[1].split(';')[0];
